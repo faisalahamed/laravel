@@ -15,7 +15,7 @@ class CategoryController extends Controller
     {
         $validator = Validator::make($request->all(), [
             'shop_id' => ['required', 'uuid', 'exists:shops,id'],
-            'type' => ['nullable', Rule::in(['product', 'expense', 'commission'])],
+            'type' => ['nullable', Rule::in(['product', 'expense', 'commission', 'income'])],
         ]);
 
         if ($validator->fails()) {
@@ -45,7 +45,7 @@ class CategoryController extends Controller
             'id' => ['required', 'uuid'],
             'shop_id' => ['required', 'uuid', 'exists:shops,id'],
             'name' => ['required', 'string', 'max:255'],
-            'type' => ['required', Rule::in(['product', 'expense', 'commission'])],
+            'type' => ['required', Rule::in(['product', 'expense', 'commission', 'income'])],
             'details' => ['nullable', 'string'],
             'image_url' => ['nullable', 'string', 'max:2048'],
             'created_at' => ['nullable', 'date'],
