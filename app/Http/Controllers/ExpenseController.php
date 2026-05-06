@@ -67,7 +67,7 @@ class ExpenseController extends Controller
 
         DB::transaction(function () use ($data): void {
             foreach ($data['expenses'] ?? [] as $expense) {
-                Expense::query()->updateOrCreate(
+                Expense::withTrashed()->updateOrCreate(
                     ['id' => $expense['id']],
                     [
                         'id' => $expense['id'],
@@ -84,7 +84,7 @@ class ExpenseController extends Controller
             }
 
             foreach ($data['cash_transactions'] ?? [] as $transaction) {
-                CashTransaction::query()->updateOrCreate(
+                CashTransaction::withTrashed()->updateOrCreate(
                     ['id' => $transaction['id']],
                     [
                         'id' => $transaction['id'],

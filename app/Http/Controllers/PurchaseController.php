@@ -97,7 +97,7 @@ class PurchaseController extends Controller
         $purchaseData = $data['purchase'];
 
         DB::transaction(function () use ($data, $purchaseData): void {
-            Purchase::query()->updateOrCreate(
+            Purchase::withTrashed()->updateOrCreate(
                 ['id' => $purchaseData['id']],
                 [
                     'id' => $purchaseData['id'],
@@ -114,7 +114,7 @@ class PurchaseController extends Controller
             );
 
             foreach ($data['items'] as $item) {
-                PurchaseItem::query()->updateOrCreate(
+                PurchaseItem::withTrashed()->updateOrCreate(
                     ['id' => $item['id']],
                     [
                         'id' => $item['id'],
@@ -136,7 +136,7 @@ class PurchaseController extends Controller
             }
 
             foreach ($data['payments'] ?? [] as $payment) {
-                PurchasePayment::query()->updateOrCreate(
+                PurchasePayment::withTrashed()->updateOrCreate(
                     ['id' => $payment['id']],
                     [
                         'id' => $payment['id'],
@@ -151,7 +151,7 @@ class PurchaseController extends Controller
             }
 
             foreach ($data['cash_transactions'] ?? [] as $cashTransaction) {
-                CashTransaction::query()->updateOrCreate(
+                CashTransaction::withTrashed()->updateOrCreate(
                     ['id' => $cashTransaction['id']],
                     [
                         'id' => $cashTransaction['id'],

@@ -7,8 +7,8 @@ use Illuminate\Database\Eloquent\Concerns\HasUuids;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\SoftDeletes;
 
-#[Fillable(['id', 'shop_id', 'purchase_id', 'category_id', 'product_name', 'buying_price', 'est_selling_price', 'quantity', 'barcode', 'other_charge', 'description', 'product_image', 'created_at', 'updated_at', 'deleted_at'])]
-class PurchaseItem extends Model
+#[Fillable(['id', 'shop_id', 'return_id', 'sale_item_id', 'product_id', 'product_name', 'sale_price', 'quantity', 'reason', 'created_at', 'updated_at', 'deleted_at'])]
+class SaleReturnItem extends Model
 {
     use HasUuids;
     use SoftDeletes;

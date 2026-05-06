@@ -90,7 +90,7 @@ class SaleController extends Controller
         $saleData = $data['sale'];
 
         DB::transaction(function () use ($data, $saleData): void {
-            Sale::query()->updateOrCreate(
+            Sale::withTrashed()->updateOrCreate(
                 ['id' => $saleData['id']],
                 [
                     'id' => $saleData['id'],
@@ -108,7 +108,7 @@ class SaleController extends Controller
             );
 
             foreach ($data['items'] as $item) {
-                SaleItem::query()->updateOrCreate(
+                SaleItem::withTrashed()->updateOrCreate(
                     ['id' => $item['id']],
                     [
                         'id' => $item['id'],
@@ -126,7 +126,7 @@ class SaleController extends Controller
             }
 
             foreach ($data['payments'] ?? [] as $payment) {
-                CustomerPayment::query()->updateOrCreate(
+                CustomerPayment::withTrashed()->updateOrCreate(
                     ['id' => $payment['id']],
                     [
                         'id' => $payment['id'],
@@ -142,7 +142,7 @@ class SaleController extends Controller
             }
 
             foreach ($data['cash_transactions'] ?? [] as $cashTransaction) {
-                CashTransaction::query()->updateOrCreate(
+                CashTransaction::withTrashed()->updateOrCreate(
                     ['id' => $cashTransaction['id']],
                     [
                         'id' => $cashTransaction['id'],

@@ -6,11 +6,13 @@ use Illuminate\Database\Eloquent\Attributes\Fillable;
 use Illuminate\Database\Eloquent\Concerns\HasUuids;
 use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\Model;
+use Illuminate\Database\Eloquent\SoftDeletes;
 
-#[Fillable(['id', 'shop_id', 'supplier_id', 'total', 'other_charge', 'description', 'buying_memo_url', 'status', 'created_at', 'updated_at'])]
+#[Fillable(['id', 'shop_id', 'supplier_id', 'total', 'other_charge', 'description', 'buying_memo_url', 'status', 'created_at', 'updated_at', 'deleted_at'])]
 class Purchase extends Model
 {
     use HasUuids;
+    use SoftDeletes;
 
     public function items(): HasMany
     {

@@ -52,7 +52,7 @@ class OwnerTransactionController extends Controller
 
         DB::transaction(function () use ($data): void {
             foreach ($data['cash_transactions'] ?? [] as $transaction) {
-                CashTransaction::query()->updateOrCreate(
+                CashTransaction::withTrashed()->updateOrCreate(
                     ['id' => $transaction['id']],
                     [
                         'id' => $transaction['id'],

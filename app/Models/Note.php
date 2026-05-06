@@ -3,13 +3,11 @@
 namespace App\Models;
 
 use Illuminate\Database\Eloquent\Concerns\HasUuids;
-use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\SoftDeletes;
 
-class Income extends Model
+class Note extends Model
 {
-    use HasFactory;
     use HasUuids;
     use SoftDeletes;
 
@@ -19,14 +17,18 @@ class Income extends Model
     protected $fillable = [
         'id',
         'shop_id',
-        'category_id',
-        'amount',
-        'total',
-        'reason',
-        'note',
-        'receipt_url',
+        'title',
+        'body',
+        'is_archived',
+        'archived_at',
         'created_at',
         'updated_at',
         'deleted_at',
+    ];
+
+    protected $casts = [
+        'is_archived' => 'boolean',
+        'archived_at' => 'datetime',
+        'deleted_at' => 'datetime',
     ];
 }

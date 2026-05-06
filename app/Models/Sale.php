@@ -7,11 +7,13 @@ use Illuminate\Database\Eloquent\Concerns\HasUuids;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsTo;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\SoftDeletes;
 
-#[Fillable(['id', 'shop_id', 'customer_id', 'subtotal', 'discount', 'vat', 'total', 'status', 'payment_method', 'created_at', 'updated_at'])]
+#[Fillable(['id', 'shop_id', 'customer_id', 'subtotal', 'discount', 'vat', 'total', 'status', 'payment_method', 'created_at', 'updated_at', 'deleted_at'])]
 class Sale extends Model
 {
     use HasUuids;
+    use SoftDeletes;
 
     public function customer(): BelongsTo
     {
