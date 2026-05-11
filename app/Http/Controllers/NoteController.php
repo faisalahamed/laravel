@@ -14,6 +14,8 @@ class NoteController extends Controller
     {
         $validator = Validator::make($request->all(), [
             'shop_id' => ['required', 'uuid', 'exists:shops,id'],
+            'user_id' => ['nullable', 'uuid', 'exists:users,id'],
+            'updated_after' => ['nullable', 'date'],
         ]);
 
         if ($validator->fails()) {
@@ -21,10 +23,16 @@ class NoteController extends Controller
         }
 
         $data = $validator->validated();
+        $this->validateShopAccess($request, $data['shop_id']);
 
         return response()->json([
+            'server_time' => $this->syncServerTime(),
             'notes' => Note::withTrashed()
                 ->where('shop_id', $data['shop_id'])
+                ->when(
+                    isset($data['updated_after']),
+                    fn ($query) => $query->where('updated_at', '>', $data['updated_after']),
+                )
                 ->orderByDesc('updated_at')
                 ->get(),
         ]);
@@ -35,6 +43,7 @@ class NoteController extends Controller
         $validator = Validator::make($request->all(), [
             'id' => ['required', 'uuid'],
             'shop_id' => ['required', 'uuid', 'exists:shops,id'],
+            'user_id' => ['nullable', 'uuid', 'exists:users,id'],
             'title' => ['nullable', 'string'],
             'body' => ['nullable', 'string'],
             'is_archived' => ['nullable', 'boolean'],
@@ -49,6 +58,7 @@ class NoteController extends Controller
         }
 
         $data = $validator->validated();
+        $this->validateShopAccess($request, $data['shop_id']);
 
         $note = Note::withTrashed()->updateOrCreate(
             ['id' => $data['id']],

@@ -14,6 +14,8 @@ class CustomerController extends Controller
     {
         $validator = Validator::make($request->all(), [
             'shop_id' => ['required', 'uuid', 'exists:shops,id'],
+            'user_id' => ['nullable', 'uuid', 'exists:users,id'],
+            'updated_after' => ['nullable', 'date'],
         ]);
 
         if ($validator->fails()) {
@@ -21,13 +23,19 @@ class CustomerController extends Controller
         }
 
         $data = $validator->validated();
+        $this->validateShopAccess($request, $data['shop_id']);
 
         return response()->json([
             'customers' => Customer::query()
                 ->withTrashed()
                 ->where('shop_id', $data['shop_id'])
+                ->when(
+                    isset($data['updated_after']),
+                    fn ($query) => $query->where('updated_at', '>', $data['updated_after']),
+                )
                 ->orderBy('name')
                 ->get(),
+            'server_time' => $this->syncServerTime(),
         ]);
     }
 
@@ -36,6 +44,7 @@ class CustomerController extends Controller
         $validator = Validator::make($request->all(), [
             'id' => ['required', 'uuid'],
             'shop_id' => ['required', 'uuid', 'exists:shops,id'],
+            'user_id' => ['nullable', 'uuid', 'exists:users,id'],
             'name' => ['required', 'string', 'max:255'],
             'email' => ['nullable', 'email', 'max:255'],
             'phone' => ['nullable', 'string', 'max:255'],
@@ -51,6 +60,7 @@ class CustomerController extends Controller
         }
 
         $data = $validator->validated();
+        $this->validateShopAccess($request, $data['shop_id']);
         $phone = isset($data['phone']) && trim((string) $data['phone']) !== ''
             ? trim((string) $data['phone'])
             : null;

@@ -16,6 +16,8 @@ class RecycleBinController extends Controller
     {
         $validator = Validator::make($request->all(), [
             'shop_id' => ['required', 'uuid', 'exists:shops,id'],
+            'user_id' => ['nullable', 'uuid', 'exists:users,id'],
+            'updated_after' => ['nullable', 'date'],
         ]);
 
         if ($validator->fails()) {
@@ -23,10 +25,16 @@ class RecycleBinController extends Controller
         }
 
         $data = $validator->validated();
+        $this->validateShopAccess($request, $data['shop_id']);
 
         return response()->json([
+            'server_time' => $this->syncServerTime(),
             'recycle_bin_entries' => RecycleBinEntry::query()
                 ->where('shop_id', $data['shop_id'])
+                ->when(
+                    isset($data['updated_after']),
+                    fn ($query) => $query->where('updated_at', '>', $data['updated_after']),
+                )
                 ->orderByDesc('deleted_at')
                 ->get(),
         ]);
@@ -37,6 +45,7 @@ class RecycleBinController extends Controller
         $validator = Validator::make($request->all(), [
             'id' => ['required', 'uuid'],
             'shop_id' => ['required', 'uuid', 'exists:shops,id'],
+            'user_id' => ['nullable', 'uuid', 'exists:users,id'],
             'table_name' => ['required', 'string', Rule::in(array_keys($this->restorableTables()))],
             'record_id' => ['required', 'uuid'],
             'display_title' => ['required', 'string', 'max:255'],
@@ -57,6 +66,7 @@ class RecycleBinController extends Controller
         }
 
         $data = $validator->validated();
+        $this->validateShopAccess($request, $data['shop_id']);
 
         DB::transaction(function () use ($data): void {
             $entry = RecycleBinEntry::query()->updateOrCreate(

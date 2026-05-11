@@ -14,6 +14,8 @@ class SupplierController extends Controller
     {
         $validator = Validator::make($request->all(), [
             'shop_id' => ['required', 'uuid', 'exists:shops,id'],
+            'user_id' => ['nullable', 'uuid', 'exists:users,id'],
+            'updated_after' => ['nullable', 'date'],
         ]);
 
         if ($validator->fails()) {
@@ -21,14 +23,20 @@ class SupplierController extends Controller
         }
 
         $data = $validator->validated();
+        $this->validateShopAccess($request, $data['shop_id']);
 
         $suppliers = Supplier::query()
             ->withTrashed()
             ->where('shop_id', $data['shop_id'])
+            ->when(
+                isset($data['updated_after']),
+                fn ($query) => $query->where('updated_at', '>', $data['updated_after']),
+            )
             ->orderBy('name')
             ->get();
 
         return response()->json([
+            'server_time' => $this->syncServerTime(),
             'suppliers' => $suppliers,
         ]);
     }
@@ -38,6 +46,7 @@ class SupplierController extends Controller
         $validator = Validator::make($request->all(), [
             'id' => ['required', 'uuid'],
             'shop_id' => ['required', 'uuid', 'exists:shops,id'],
+            'user_id' => ['nullable', 'uuid', 'exists:users,id'],
             'name' => ['required', 'string', 'max:255'],
             'image' => ['nullable', 'string', 'max:2048'],
             'mobile' => ['nullable', 'string', 'max:255'],
@@ -52,6 +61,7 @@ class SupplierController extends Controller
         }
 
         $data = $validator->validated();
+        $this->validateShopAccess($request, $data['shop_id']);
 
         $supplier = Supplier::withTrashed()->updateOrCreate(
             ['id' => $data['id']],

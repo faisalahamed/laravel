@@ -19,12 +19,33 @@ class SaleController extends Controller
     {
         $validated = $request->validate([
             'shop_id' => ['required', 'uuid', 'exists:shops,id'],
+            'user_id' => ['nullable', 'uuid', 'exists:users,id'],
+            'updated_after' => ['nullable', 'date'],
         ]);
 
+        $this->validateShopAccess($request, $validated['shop_id']);
+
         return response()->json([
+            'server_time' => $this->syncServerTime(),
             'sales' => Sale::query()
+                ->withTrashed()
                 ->where('shop_id', $validated['shop_id'])
-                ->with(['customer', 'items', 'payments', 'cashTransactions'])
+                ->when(
+                    isset($validated['updated_after']),
+                    fn ($query) => $query->where(function ($query) use ($validated): void {
+                        $query
+                            ->where('updated_at', '>', $validated['updated_after'])
+                            ->orWhereHas('items', fn ($itemQuery) => $itemQuery->withTrashed()->where('updated_at', '>', $validated['updated_after']))
+                            ->orWhereHas('payments', fn ($paymentQuery) => $paymentQuery->withTrashed()->where('updated_at', '>', $validated['updated_after']))
+                            ->orWhereHas('cashTransactions', fn ($cashQuery) => $cashQuery->withTrashed()->where('updated_at', '>', $validated['updated_after']));
+                    }),
+                )
+                ->with([
+                    'customer',
+                    'items' => fn ($query) => $query->withTrashed(),
+                    'payments' => fn ($query) => $query->withTrashed(),
+                    'cashTransactions' => fn ($query) => $query->withTrashed(),
+                ])
                 ->orderByDesc('created_at')
                 ->get(),
         ]);
@@ -34,6 +55,7 @@ class SaleController extends Controller
     {
         $validator = Validator::make($request->all(), [
             'sale' => ['required', 'array'],
+            'user_id' => ['nullable', 'uuid', 'exists:users,id'],
             'sale.id' => ['required', 'uuid'],
             'sale.shop_id' => ['required', 'uuid', 'exists:shops,id'],
             'sale.customer_id' => ['required', 'uuid', 'exists:customers,id'],
@@ -88,6 +110,11 @@ class SaleController extends Controller
 
         $data = $validator->validated();
         $saleData = $data['sale'];
+
+        $this->validateShopAccess($request, $saleData['shop_id']);
+        $this->validateSameShop($saleData['shop_id'], $data['items']);
+        $this->validateSameShop($saleData['shop_id'], $data['payments'] ?? []);
+        $this->validateSameShop($saleData['shop_id'], $data['cash_transactions'] ?? []);
 
         DB::transaction(function () use ($data, $saleData): void {
             Sale::withTrashed()->updateOrCreate(

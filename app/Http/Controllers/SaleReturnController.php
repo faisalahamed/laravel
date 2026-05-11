@@ -18,12 +18,30 @@ class SaleReturnController extends Controller
     {
         $validated = $request->validate([
             'shop_id' => ['required', 'uuid', 'exists:shops,id'],
+            'user_id' => ['nullable', 'uuid', 'exists:users,id'],
+            'updated_after' => ['nullable', 'date'],
         ]);
 
+        $this->validateShopAccess($request, $validated['shop_id']);
+
         return response()->json([
+            'server_time' => $this->syncServerTime(),
             'sale_returns' => SaleReturn::query()
+                ->withTrashed()
                 ->where('shop_id', $validated['shop_id'])
-                ->with(['items', 'cashTransactions'])
+                ->when(
+                    isset($validated['updated_after']),
+                    fn ($query) => $query->where(function ($query) use ($validated): void {
+                        $query
+                            ->where('updated_at', '>', $validated['updated_after'])
+                            ->orWhereHas('items', fn ($itemQuery) => $itemQuery->withTrashed()->where('updated_at', '>', $validated['updated_after']))
+                            ->orWhereHas('cashTransactions', fn ($cashQuery) => $cashQuery->withTrashed()->where('updated_at', '>', $validated['updated_after']));
+                    }),
+                )
+                ->with([
+                    'items' => fn ($query) => $query->withTrashed(),
+                    'cashTransactions' => fn ($query) => $query->withTrashed(),
+                ])
                 ->orderByDesc('created_at')
                 ->get(),
         ]);
@@ -76,6 +94,10 @@ class SaleReturnController extends Controller
 
         $data = $validator->validated();
         $returnData = $data['sale_return'];
+
+        $this->validateShopAccess($request, $returnData['shop_id']);
+        $this->validateSameShop($returnData['shop_id'], $data['items']);
+        $this->validateSameShop($returnData['shop_id'], $data['cash_transactions'] ?? []);
 
         DB::transaction(function () use ($data, $returnData): void {
             SaleReturn::withTrashed()->updateOrCreate(

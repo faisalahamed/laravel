@@ -16,12 +16,21 @@ class OwnerTransactionController extends Controller
     {
         $validated = $request->validate([
             'shop_id' => ['required', 'uuid', 'exists:shops,id'],
+            'user_id' => ['nullable', 'uuid', 'exists:users,id'],
+            'updated_after' => ['nullable', 'date'],
         ]);
 
+        $this->validateShopAccess($request, $validated['shop_id']);
+
         return response()->json([
+            'server_time' => $this->syncServerTime(),
             'cash_transactions' => CashTransaction::query()
                 ->where('shop_id', $validated['shop_id'])
                 ->whereIn('type', ['owner_given', 'owner_taken'])
+                ->when(
+                    isset($validated['updated_after']),
+                    fn ($query) => $query->where('updated_at', '>', $validated['updated_after']),
+                )
                 ->orderByDesc('created_at')
                 ->get(),
         ]);
@@ -49,6 +58,12 @@ class OwnerTransactionController extends Controller
         }
 
         $data = $validator->validated();
+        $shopId = $data['cash_transactions'][0]['shop_id'] ?? null;
+
+        if ($shopId) {
+            $this->validateShopAccess($request, $shopId);
+            $this->validateSameShop($shopId, $data['cash_transactions'] ?? []);
+        }
 
         DB::transaction(function () use ($data): void {
             foreach ($data['cash_transactions'] ?? [] as $transaction) {

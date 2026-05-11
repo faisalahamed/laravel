@@ -19,17 +19,40 @@ class PurchaseController extends Controller
     {
         $validated = $request->validate([
             'shop_id' => ['required', 'uuid', 'exists:shops,id'],
+            'user_id' => ['nullable', 'uuid', 'exists:users,id'],
+            'updated_after' => ['nullable', 'date'],
         ]);
 
+        $this->validateShopAccess($request, $validated['shop_id']);
+
         return response()->json([
+            'server_time' => $this->syncServerTime(),
             'purchases' => Purchase::query()
+                ->withTrashed()
                 ->where('shop_id', $validated['shop_id'])
-                ->with(['items', 'payments'])
+                ->when(
+                    isset($validated['updated_after']),
+                    fn ($query) => $query->where(function ($query) use ($validated): void {
+                        $query
+                            ->where('updated_at', '>', $validated['updated_after'])
+                            ->orWhereHas('items', fn ($itemQuery) => $itemQuery->withTrashed()->where('updated_at', '>', $validated['updated_after']))
+                            ->orWhereHas('payments', fn ($paymentQuery) => $paymentQuery->withTrashed()->where('updated_at', '>', $validated['updated_after']));
+                    }),
+                )
+                ->with([
+                    'items' => fn ($query) => $query->withTrashed(),
+                    'payments' => fn ($query) => $query->withTrashed(),
+                ])
                 ->orderByDesc('created_at')
                 ->get(),
             'cash_transactions' => CashTransaction::query()
+                ->withTrashed()
                 ->where('shop_id', $validated['shop_id'])
                 ->where('type', 'purchase_payment')
+                ->when(
+                    isset($validated['updated_after']),
+                    fn ($query) => $query->where('updated_at', '>', $validated['updated_after']),
+                )
                 ->orderByDesc('created_at')
                 ->get(),
         ]);
@@ -95,6 +118,11 @@ class PurchaseController extends Controller
 
         $data = $validator->validated();
         $purchaseData = $data['purchase'];
+
+        $this->validateShopAccess($request, $purchaseData['shop_id']);
+        $this->validateSameShop($purchaseData['shop_id'], $data['items']);
+        $this->validateSameShop($purchaseData['shop_id'], $data['payments'] ?? []);
+        $this->validateSameShop($purchaseData['shop_id'], $data['cash_transactions'] ?? []);
 
         DB::transaction(function () use ($data, $purchaseData): void {
             Purchase::withTrashed()->updateOrCreate(

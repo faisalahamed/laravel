@@ -15,6 +15,8 @@ class CategoryController extends Controller
     {
         $validator = Validator::make($request->all(), [
             'shop_id' => ['required', 'uuid', 'exists:shops,id'],
+            'user_id' => ['nullable', 'uuid', 'exists:users,id'],
+            'updated_after' => ['nullable', 'date'],
             'type' => ['nullable', Rule::in(['product', 'expense', 'commission', 'income'])],
         ]);
 
@@ -23,10 +25,15 @@ class CategoryController extends Controller
         }
 
         $data = $validator->validated();
+        $this->validateShopAccess($request, $data['shop_id']);
 
         $categories = Category::query()
             ->withTrashed()
             ->where('shop_id', $data['shop_id'])
+            ->when(
+                isset($data['updated_after']),
+                fn ($query) => $query->where('updated_at', '>', $data['updated_after']),
+            )
             ->when(
                 isset($data['type']),
                 fn ($query) => $query->where('type', $data['type']),
@@ -35,6 +42,7 @@ class CategoryController extends Controller
             ->get();
 
         return response()->json([
+            'server_time' => $this->syncServerTime(),
             'categories' => $categories,
         ]);
     }
@@ -44,6 +52,7 @@ class CategoryController extends Controller
         $validator = Validator::make($request->all(), [
             'id' => ['required', 'uuid'],
             'shop_id' => ['required', 'uuid', 'exists:shops,id'],
+            'user_id' => ['nullable', 'uuid', 'exists:users,id'],
             'name' => ['required', 'string', 'max:255'],
             'type' => ['required', Rule::in(['product', 'expense', 'commission', 'income'])],
             'details' => ['nullable', 'string'],
@@ -58,6 +67,7 @@ class CategoryController extends Controller
         }
 
         $data = $validator->validated();
+        $this->validateShopAccess($request, $data['shop_id']);
 
         $category = Category::withTrashed()->updateOrCreate(
             ['id' => $data['id']],
