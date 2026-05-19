@@ -44,6 +44,8 @@ class LoginController extends Controller
             'message' => 'Login successful.',
             'user' => $user,
             'shop' => $user->shop,
+            'allowed_shops' => [$user->shop],
+            'selected_shop_id' => $user->shop_id,
         ]);
     }
 }

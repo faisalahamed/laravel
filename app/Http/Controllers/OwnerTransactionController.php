@@ -21,16 +21,15 @@ class OwnerTransactionController extends Controller
         ]);
 
         $this->validateShopAccess($request, $validated['shop_id']);
+        $syncStartedAt = now();
 
         return response()->json([
-            'server_time' => $this->syncServerTime(),
+            'server_time' => $this->syncServerTime($syncStartedAt),
             'cash_transactions' => CashTransaction::query()
+                ->withTrashed()
                 ->where('shop_id', $validated['shop_id'])
                 ->whereIn('type', ['owner_given', 'owner_taken'])
-                ->when(
-                    isset($validated['updated_after']),
-                    fn ($query) => $query->where('updated_at', '>', $validated['updated_after']),
-                )
+                ->tap(fn ($query) => $this->applySyncWindow($query, $validated['updated_after'] ?? null, $syncStartedAt))
                 ->orderByDesc('created_at')
                 ->get(),
         ]);
@@ -80,7 +79,7 @@ class OwnerTransactionController extends Controller
                         'method' => $transaction['method'] ?? null,
                         'note' => $transaction['note'] ?? null,
                         'created_at' => $transaction['created_at'] ?? now(),
-                        'updated_at' => $transaction['updated_at'] ?? now(),
+                        'updated_at' => now(),
                     ],
                 );
             }

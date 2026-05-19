@@ -23,19 +23,21 @@ class SaleReturnController extends Controller
         ]);
 
         $this->validateShopAccess($request, $validated['shop_id']);
+        $syncStartedAt = now();
 
         return response()->json([
-            'server_time' => $this->syncServerTime(),
+            'server_time' => $this->syncServerTime($syncStartedAt),
             'sale_returns' => SaleReturn::query()
                 ->withTrashed()
                 ->where('shop_id', $validated['shop_id'])
+                ->where('updated_at', '<=', $syncStartedAt)
                 ->when(
                     isset($validated['updated_after']),
-                    fn ($query) => $query->where(function ($query) use ($validated): void {
+                    fn ($query) => $query->where(function ($query) use ($validated, $syncStartedAt): void {
                         $query
-                            ->where('updated_at', '>', $validated['updated_after'])
-                            ->orWhereHas('items', fn ($itemQuery) => $itemQuery->withTrashed()->where('updated_at', '>', $validated['updated_after']))
-                            ->orWhereHas('cashTransactions', fn ($cashQuery) => $cashQuery->withTrashed()->where('updated_at', '>', $validated['updated_after']));
+                            ->where(fn ($returnQuery) => $this->applySyncWindow($returnQuery, $validated['updated_after'], $syncStartedAt))
+                            ->orWhereHas('items', fn ($itemQuery) => $this->applySyncWindow($itemQuery->withTrashed(), $validated['updated_after'], $syncStartedAt))
+                            ->orWhereHas('cashTransactions', fn ($cashQuery) => $this->applySyncWindow($cashQuery->withTrashed(), $validated['updated_after'], $syncStartedAt));
                     }),
                 )
                 ->with([
@@ -60,6 +62,7 @@ class SaleReturnController extends Controller
             'sale_return.note' => ['nullable', 'string'],
             'sale_return.created_at' => ['nullable', 'date'],
             'sale_return.updated_at' => ['nullable', 'date'],
+            'sale_return.deleted_at' => ['nullable', 'date'],
 
             'items' => ['required', 'array', 'min:1'],
             'items.*.id' => ['required', 'uuid'],
@@ -73,6 +76,7 @@ class SaleReturnController extends Controller
             'items.*.reason' => ['nullable', 'string'],
             'items.*.created_at' => ['nullable', 'date'],
             'items.*.updated_at' => ['nullable', 'date'],
+            'items.*.deleted_at' => ['nullable', 'date'],
 
             'cash_transactions' => ['nullable', 'array'],
             'cash_transactions.*.id' => ['required', 'uuid'],
@@ -86,6 +90,7 @@ class SaleReturnController extends Controller
             'cash_transactions.*.note' => ['nullable', 'string'],
             'cash_transactions.*.created_at' => ['nullable', 'date'],
             'cash_transactions.*.updated_at' => ['nullable', 'date'],
+            'cash_transactions.*.deleted_at' => ['nullable', 'date'],
         ]);
 
         if ($validator->fails()) {
@@ -111,7 +116,8 @@ class SaleReturnController extends Controller
                     'refund_total' => $returnData['refund_total'],
                     'note' => $returnData['note'] ?? null,
                     'created_at' => $returnData['created_at'] ?? now(),
-                    'updated_at' => $returnData['updated_at'] ?? now(),
+                    'updated_at' => now(),
+                    'deleted_at' => $returnData['deleted_at'] ?? null,
                 ],
             );
 
@@ -129,7 +135,8 @@ class SaleReturnController extends Controller
                         'quantity' => $item['quantity'],
                         'reason' => $item['reason'] ?? null,
                         'created_at' => $item['created_at'] ?? now(),
-                        'updated_at' => $item['updated_at'] ?? now(),
+                        'updated_at' => now(),
+                        'deleted_at' => $item['deleted_at'] ?? null,
                     ],
                 );
             }
@@ -148,7 +155,8 @@ class SaleReturnController extends Controller
                         'method' => $cashTransaction['method'] ?? null,
                         'note' => $cashTransaction['note'] ?? null,
                         'created_at' => $cashTransaction['created_at'] ?? now(),
-                        'updated_at' => $cashTransaction['updated_at'] ?? now(),
+                        'updated_at' => now(),
+                        'deleted_at' => $cashTransaction['deleted_at'] ?? null,
                     ],
                 );
             }
@@ -156,7 +164,11 @@ class SaleReturnController extends Controller
 
         return response()->json([
             'sale_return' => SaleReturn::query()
-                ->with(['items', 'cashTransactions'])
+                ->withTrashed()
+                ->with([
+                    'items' => fn ($query) => $query->withTrashed(),
+                    'cashTransactions' => fn ($query) => $query->withTrashed(),
+                ])
                 ->find($returnData['id']),
         ], 201);
     }

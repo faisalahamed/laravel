@@ -24,19 +24,21 @@ class PurchaseController extends Controller
         ]);
 
         $this->validateShopAccess($request, $validated['shop_id']);
+        $syncStartedAt = now();
 
         return response()->json([
-            'server_time' => $this->syncServerTime(),
+            'server_time' => $this->syncServerTime($syncStartedAt),
             'purchases' => Purchase::query()
                 ->withTrashed()
                 ->where('shop_id', $validated['shop_id'])
+                ->where('updated_at', '<=', $syncStartedAt)
                 ->when(
                     isset($validated['updated_after']),
-                    fn ($query) => $query->where(function ($query) use ($validated): void {
+                    fn ($query) => $query->where(function ($query) use ($validated, $syncStartedAt): void {
                         $query
-                            ->where('updated_at', '>', $validated['updated_after'])
-                            ->orWhereHas('items', fn ($itemQuery) => $itemQuery->withTrashed()->where('updated_at', '>', $validated['updated_after']))
-                            ->orWhereHas('payments', fn ($paymentQuery) => $paymentQuery->withTrashed()->where('updated_at', '>', $validated['updated_after']));
+                            ->where(fn ($purchaseQuery) => $this->applySyncWindow($purchaseQuery, $validated['updated_after'], $syncStartedAt))
+                            ->orWhereHas('items', fn ($itemQuery) => $this->applySyncWindow($itemQuery->withTrashed(), $validated['updated_after'], $syncStartedAt))
+                            ->orWhereHas('payments', fn ($paymentQuery) => $this->applySyncWindow($paymentQuery->withTrashed(), $validated['updated_after'], $syncStartedAt));
                     }),
                 )
                 ->with([
@@ -49,10 +51,7 @@ class PurchaseController extends Controller
                 ->withTrashed()
                 ->where('shop_id', $validated['shop_id'])
                 ->where('type', 'purchase_payment')
-                ->when(
-                    isset($validated['updated_after']),
-                    fn ($query) => $query->where('updated_at', '>', $validated['updated_after']),
-                )
+                ->tap(fn ($query) => $this->applySyncWindow($query, $validated['updated_after'] ?? null, $syncStartedAt))
                 ->orderByDesc('created_at')
                 ->get(),
         ]);
@@ -137,7 +136,7 @@ class PurchaseController extends Controller
                     'buying_memo_url' => $purchaseData['buying_memo_url'] ?? null,
                     'status' => $purchaseData['status'],
                     'created_at' => $purchaseData['created_at'] ?? now(),
-                    'updated_at' => $purchaseData['updated_at'] ?? now(),
+                    'updated_at' => now(),
                 ],
             );
 
@@ -158,7 +157,7 @@ class PurchaseController extends Controller
                         'description' => $item['description'] ?? null,
                         'product_image' => $item['product_image'] ?? null,
                         'created_at' => $item['created_at'] ?? now(),
-                        'updated_at' => $item['updated_at'] ?? now(),
+                        'updated_at' => now(),
                     ],
                 );
             }
@@ -173,7 +172,7 @@ class PurchaseController extends Controller
                         'payments' => $payment['payments'],
                         'description' => $payment['description'] ?? null,
                         'created_at' => $payment['created_at'] ?? now(),
-                        'updated_at' => $payment['updated_at'] ?? now(),
+                        'updated_at' => now(),
                     ],
                 );
             }
@@ -192,7 +191,7 @@ class PurchaseController extends Controller
                         'method' => $cashTransaction['method'] ?? null,
                         'note' => $cashTransaction['note'] ?? null,
                         'created_at' => $cashTransaction['created_at'] ?? now(),
-                        'updated_at' => $cashTransaction['updated_at'] ?? now(),
+                        'updated_at' => now(),
                     ],
                 );
             }

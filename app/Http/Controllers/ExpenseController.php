@@ -22,26 +22,21 @@ class ExpenseController extends Controller
         ]);
 
         $this->validateShopAccess($request, $validated['shop_id']);
+        $syncStartedAt = now();
 
         return response()->json([
-            'server_time' => $this->syncServerTime(),
+            'server_time' => $this->syncServerTime($syncStartedAt),
             'expenses' => Expense::query()
                 ->withTrashed()
                 ->where('shop_id', $validated['shop_id'])
-                ->when(
-                    isset($validated['updated_after']),
-                    fn ($query) => $query->where('updated_at', '>', $validated['updated_after']),
-                )
+                ->tap(fn ($query) => $this->applySyncWindow($query, $validated['updated_after'] ?? null, $syncStartedAt))
                 ->orderByDesc('created_at')
                 ->get(),
             'cash_transactions' => CashTransaction::query()
                 ->withTrashed()
                 ->where('shop_id', $validated['shop_id'])
                 ->where('type', 'expense')
-                ->when(
-                    isset($validated['updated_after']),
-                    fn ($query) => $query->where('updated_at', '>', $validated['updated_after']),
-                )
+                ->tap(fn ($query) => $this->applySyncWindow($query, $validated['updated_after'] ?? null, $syncStartedAt))
                 ->orderByDesc('created_at')
                 ->get(),
         ]);
@@ -101,7 +96,7 @@ class ExpenseController extends Controller
                         'reason' => $expense['reason'] ?? null,
                         'note' => $expense['note'] ?? null,
                         'created_at' => $expense['created_at'] ?? now(),
-                        'updated_at' => $expense['updated_at'] ?? now(),
+                        'updated_at' => now(),
                     ],
                 );
             }
@@ -120,7 +115,7 @@ class ExpenseController extends Controller
                         'method' => $transaction['method'] ?? null,
                         'note' => $transaction['note'] ?? null,
                         'created_at' => $transaction['created_at'] ?? now(),
-                        'updated_at' => $transaction['updated_at'] ?? now(),
+                        'updated_at' => now(),
                     ],
                 );
             }

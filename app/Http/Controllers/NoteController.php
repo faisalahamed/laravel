@@ -24,15 +24,13 @@ class NoteController extends Controller
 
         $data = $validator->validated();
         $this->validateShopAccess($request, $data['shop_id']);
+        $syncStartedAt = now();
 
         return response()->json([
-            'server_time' => $this->syncServerTime(),
+            'server_time' => $this->syncServerTime($syncStartedAt),
             'notes' => Note::withTrashed()
                 ->where('shop_id', $data['shop_id'])
-                ->when(
-                    isset($data['updated_after']),
-                    fn ($query) => $query->where('updated_at', '>', $data['updated_after']),
-                )
+                ->tap(fn ($query) => $this->applySyncWindow($query, $data['updated_after'] ?? null, $syncStartedAt))
                 ->orderByDesc('updated_at')
                 ->get(),
         ]);
@@ -70,7 +68,7 @@ class NoteController extends Controller
                 'is_archived' => $data['is_archived'] ?? false,
                 'archived_at' => $data['archived_at'] ?? null,
                 'created_at' => $data['created_at'] ?? now(),
-                'updated_at' => $data['updated_at'] ?? now(),
+                'updated_at' => now(),
                 'deleted_at' => $data['deleted_at'] ?? null,
             ],
         );

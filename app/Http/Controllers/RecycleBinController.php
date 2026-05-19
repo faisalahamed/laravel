@@ -26,15 +26,13 @@ class RecycleBinController extends Controller
 
         $data = $validator->validated();
         $this->validateShopAccess($request, $data['shop_id']);
+        $syncStartedAt = now();
 
         return response()->json([
-            'server_time' => $this->syncServerTime(),
+            'server_time' => $this->syncServerTime($syncStartedAt),
             'recycle_bin_entries' => RecycleBinEntry::query()
                 ->where('shop_id', $data['shop_id'])
-                ->when(
-                    isset($data['updated_after']),
-                    fn ($query) => $query->where('updated_at', '>', $data['updated_after']),
-                )
+                ->tap(fn ($query) => $this->applySyncWindow($query, $data['updated_after'] ?? null, $syncStartedAt))
                 ->orderByDesc('deleted_at')
                 ->get(),
         ]);
@@ -86,7 +84,7 @@ class RecycleBinController extends Controller
                     'restore_status' => $data['restore_status'],
                     'restore_block_reason' => $data['restore_block_reason'] ?? null,
                     'created_at' => $data['created_at'] ?? now(),
-                    'updated_at' => $data['updated_at'] ?? now(),
+                    'updated_at' => now(),
                 ],
             );
 
@@ -128,6 +126,7 @@ class RecycleBinController extends Controller
     {
         if (is_string($value)) {
             $decoded = json_decode($value, true);
+
             return json_last_error() === JSON_ERROR_NONE ? $decoded : ['value' => $value];
         }
 
@@ -152,6 +151,7 @@ class RecycleBinController extends Controller
                 'deleted_at' => null,
                 'updated_at' => now(),
             ]);
+
             return;
         }
 
@@ -166,6 +166,7 @@ class RecycleBinController extends Controller
                 'deleted_at' => $entry->deleted_at,
                 'updated_at' => now(),
             ]);
+
             return;
         }
 

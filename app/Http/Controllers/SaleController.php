@@ -24,20 +24,22 @@ class SaleController extends Controller
         ]);
 
         $this->validateShopAccess($request, $validated['shop_id']);
+        $syncStartedAt = now();
 
         return response()->json([
-            'server_time' => $this->syncServerTime(),
+            'server_time' => $this->syncServerTime($syncStartedAt),
             'sales' => Sale::query()
                 ->withTrashed()
                 ->where('shop_id', $validated['shop_id'])
+                ->where('updated_at', '<=', $syncStartedAt)
                 ->when(
                     isset($validated['updated_after']),
-                    fn ($query) => $query->where(function ($query) use ($validated): void {
+                    fn ($query) => $query->where(function ($query) use ($validated, $syncStartedAt): void {
                         $query
-                            ->where('updated_at', '>', $validated['updated_after'])
-                            ->orWhereHas('items', fn ($itemQuery) => $itemQuery->withTrashed()->where('updated_at', '>', $validated['updated_after']))
-                            ->orWhereHas('payments', fn ($paymentQuery) => $paymentQuery->withTrashed()->where('updated_at', '>', $validated['updated_after']))
-                            ->orWhereHas('cashTransactions', fn ($cashQuery) => $cashQuery->withTrashed()->where('updated_at', '>', $validated['updated_after']));
+                            ->where(fn ($saleQuery) => $this->applySyncWindow($saleQuery, $validated['updated_after'], $syncStartedAt))
+                            ->orWhereHas('items', fn ($itemQuery) => $this->applySyncWindow($itemQuery->withTrashed(), $validated['updated_after'], $syncStartedAt))
+                            ->orWhereHas('payments', fn ($paymentQuery) => $this->applySyncWindow($paymentQuery->withTrashed(), $validated['updated_after'], $syncStartedAt))
+                            ->orWhereHas('cashTransactions', fn ($cashQuery) => $this->applySyncWindow($cashQuery->withTrashed(), $validated['updated_after'], $syncStartedAt));
                     }),
                 )
                 ->with([
@@ -67,6 +69,7 @@ class SaleController extends Controller
             'sale.payment_method' => ['nullable', 'string', 'max:255'],
             'sale.created_at' => ['nullable', 'date'],
             'sale.updated_at' => ['nullable', 'date'],
+            'sale.deleted_at' => ['nullable', 'date'],
 
             'items' => ['required', 'array', 'min:1'],
             'items.*.id' => ['required', 'uuid'],
@@ -79,6 +82,7 @@ class SaleController extends Controller
             'items.*.price' => ['required', 'numeric', 'min:0'],
             'items.*.created_at' => ['nullable', 'date'],
             'items.*.updated_at' => ['nullable', 'date'],
+            'items.*.deleted_at' => ['nullable', 'date'],
 
             'payments' => ['nullable', 'array'],
             'payments.*.id' => ['required', 'uuid'],
@@ -89,6 +93,7 @@ class SaleController extends Controller
             'payments.*.description' => ['nullable', 'string'],
             'payments.*.created_at' => ['nullable', 'date'],
             'payments.*.updated_at' => ['nullable', 'date'],
+            'payments.*.deleted_at' => ['nullable', 'date'],
 
             'cash_transactions' => ['nullable', 'array'],
             'cash_transactions.*.id' => ['required', 'uuid'],
@@ -102,6 +107,7 @@ class SaleController extends Controller
             'cash_transactions.*.note' => ['nullable', 'string'],
             'cash_transactions.*.created_at' => ['nullable', 'date'],
             'cash_transactions.*.updated_at' => ['nullable', 'date'],
+            'cash_transactions.*.deleted_at' => ['nullable', 'date'],
         ]);
 
         if ($validator->fails()) {
@@ -130,7 +136,8 @@ class SaleController extends Controller
                     'status' => $saleData['status'],
                     'payment_method' => $saleData['payment_method'] ?? null,
                     'created_at' => $saleData['created_at'] ?? now(),
-                    'updated_at' => $saleData['updated_at'] ?? now(),
+                    'updated_at' => now(),
+                    'deleted_at' => $saleData['deleted_at'] ?? null,
                 ],
             );
 
@@ -147,7 +154,8 @@ class SaleController extends Controller
                         'quantity' => $item['quantity'],
                         'price' => $item['price'],
                         'created_at' => $item['created_at'] ?? now(),
-                        'updated_at' => $item['updated_at'] ?? now(),
+                        'updated_at' => now(),
+                        'deleted_at' => $item['deleted_at'] ?? null,
                     ],
                 );
             }
@@ -163,7 +171,8 @@ class SaleController extends Controller
                         'payments' => $payment['payments'],
                         'description' => $payment['description'] ?? null,
                         'created_at' => $payment['created_at'] ?? now(),
-                        'updated_at' => $payment['updated_at'] ?? now(),
+                        'updated_at' => now(),
+                        'deleted_at' => $payment['deleted_at'] ?? null,
                     ],
                 );
             }
@@ -182,7 +191,8 @@ class SaleController extends Controller
                         'method' => $cashTransaction['method'] ?? null,
                         'note' => $cashTransaction['note'] ?? null,
                         'created_at' => $cashTransaction['created_at'] ?? now(),
-                        'updated_at' => $cashTransaction['updated_at'] ?? now(),
+                        'updated_at' => now(),
+                        'deleted_at' => $cashTransaction['deleted_at'] ?? null,
                     ],
                 );
             }
@@ -190,7 +200,13 @@ class SaleController extends Controller
 
         return response()->json([
             'sale' => Sale::query()
-                ->with(['customer', 'items', 'payments', 'cashTransactions'])
+                ->withTrashed()
+                ->with([
+                    'customer',
+                    'items' => fn ($query) => $query->withTrashed(),
+                    'payments' => fn ($query) => $query->withTrashed(),
+                    'cashTransactions' => fn ($query) => $query->withTrashed(),
+                ])
                 ->find($saleData['id']),
         ], 201);
     }

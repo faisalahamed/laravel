@@ -24,18 +24,16 @@ class CustomerController extends Controller
 
         $data = $validator->validated();
         $this->validateShopAccess($request, $data['shop_id']);
+        $syncStartedAt = now();
 
         return response()->json([
             'customers' => Customer::query()
                 ->withTrashed()
                 ->where('shop_id', $data['shop_id'])
-                ->when(
-                    isset($data['updated_after']),
-                    fn ($query) => $query->where('updated_at', '>', $data['updated_after']),
-                )
+                ->tap(fn ($query) => $this->applySyncWindow($query, $data['updated_after'] ?? null, $syncStartedAt))
                 ->orderBy('name')
                 ->get(),
-            'server_time' => $this->syncServerTime(),
+            'server_time' => $this->syncServerTime($syncStartedAt),
         ]);
     }
 
@@ -85,7 +83,7 @@ class CustomerController extends Controller
             'address' => $data['address'] ?? null,
             'notes' => $data['notes'] ?? null,
             'created_at' => $customer->exists ? $customer->created_at : ($data['created_at'] ?? now()),
-            'updated_at' => $data['updated_at'] ?? now(),
+            'updated_at' => now(),
             'deleted_at' => $data['deleted_at'] ?? null,
         ]);
         $customer->save();
