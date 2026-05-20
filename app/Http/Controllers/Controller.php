@@ -2,7 +2,6 @@
 
 namespace App\Http\Controllers;
 
-use App\Models\User;
 use Illuminate\Http\Request;
 use Illuminate\Validation\ValidationException;
 
@@ -10,24 +9,26 @@ abstract class Controller
 {
     protected function validateShopAccess(Request $request, string $shopId): void
     {
-        $userId = $request->input('user_id')
-            ?? $request->query('user_id')
-            ?? $request->header('X-User-Id');
+        $user = $request->user();
 
-        if (! $userId) {
+        if (! $user) {
             throw ValidationException::withMessages([
-                'user_id' => ['USER_REQUIRED: Sync requests must include the authenticated local user id.'],
+                'user_id' => ['USER_REQUIRED: Sync requests must include an authenticated user token.'],
                 'shop_id' => ['SELECTED_SHOP_INVALID: Selected shop could not be validated.'],
             ]);
         }
 
-        $hasAccess = User::query()
-            ->where('id', $userId)
-            ->where('shop_id', $shopId)
-            ->whereNull('deleted_at')
-            ->exists();
+        $clientUserId = $request->input('user_id')
+            ?? $request->query('user_id')
+            ?? $request->header('X-User-Id');
 
-        if (! $hasAccess) {
+        if ($clientUserId && $clientUserId !== $user->id) {
+            throw ValidationException::withMessages([
+                'user_id' => ['USER_MISMATCH: Payload user does not match authenticated token user.'],
+            ]);
+        }
+
+        if ($user->shop_id !== $shopId || $user->deleted_at !== null) {
             throw ValidationException::withMessages([
                 'shop_id' => ['SELECTED_SHOP_INVALID: User is not authorized for this shop.'],
             ]);
