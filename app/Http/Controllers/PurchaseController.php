@@ -64,6 +64,7 @@ class PurchaseController extends Controller
             'purchase.id' => ['required', 'uuid'],
             'purchase.shop_id' => ['required', 'uuid', 'exists:shops,id'],
             'purchase.supplier_id' => ['required', 'uuid', 'exists:suppliers,id'],
+            'purchase.source_type' => ['nullable', Rule::in(['purchase', 'manual_stock'])],
             'purchase.total' => ['required', 'numeric', 'min:0'],
             'purchase.other_charge' => ['nullable', 'numeric', 'min:0'],
             'purchase.description' => ['nullable', 'string'],
@@ -71,6 +72,7 @@ class PurchaseController extends Controller
             'purchase.status' => ['required', Rule::in(['pending', 'completed'])],
             'purchase.created_at' => ['nullable', 'date'],
             'purchase.updated_at' => ['nullable', 'date'],
+            'purchase.deleted_at' => ['nullable', 'date'],
 
             'items' => ['required', 'array', 'min:1'],
             'items.*.id' => ['required', 'uuid'],
@@ -87,6 +89,7 @@ class PurchaseController extends Controller
             'items.*.product_image' => ['nullable', 'string', 'max:2048'],
             'items.*.created_at' => ['nullable', 'date'],
             'items.*.updated_at' => ['nullable', 'date'],
+            'items.*.deleted_at' => ['nullable', 'date'],
 
             'payments' => ['nullable', 'array'],
             'payments.*.id' => ['required', 'uuid'],
@@ -96,6 +99,7 @@ class PurchaseController extends Controller
             'payments.*.description' => ['nullable', 'string'],
             'payments.*.created_at' => ['nullable', 'date'],
             'payments.*.updated_at' => ['nullable', 'date'],
+            'payments.*.deleted_at' => ['nullable', 'date'],
 
             'cash_transactions' => ['nullable', 'array'],
             'cash_transactions.*.id' => ['required', 'uuid'],
@@ -109,6 +113,7 @@ class PurchaseController extends Controller
             'cash_transactions.*.note' => ['nullable', 'string'],
             'cash_transactions.*.created_at' => ['nullable', 'date'],
             'cash_transactions.*.updated_at' => ['nullable', 'date'],
+            'cash_transactions.*.deleted_at' => ['nullable', 'date'],
         ]);
 
         if ($validator->fails()) {
@@ -130,6 +135,7 @@ class PurchaseController extends Controller
                     'id' => $purchaseData['id'],
                     'shop_id' => $purchaseData['shop_id'],
                     'supplier_id' => $purchaseData['supplier_id'],
+                    'source_type' => $purchaseData['source_type'] ?? 'purchase',
                     'total' => $purchaseData['total'],
                     'other_charge' => $purchaseData['other_charge'] ?? 0,
                     'description' => $purchaseData['description'] ?? null,
@@ -137,6 +143,7 @@ class PurchaseController extends Controller
                     'status' => $purchaseData['status'],
                     'created_at' => $purchaseData['created_at'] ?? now(),
                     'updated_at' => now(),
+                    'deleted_at' => $purchaseData['deleted_at'] ?? null,
                 ],
             );
 
@@ -158,6 +165,7 @@ class PurchaseController extends Controller
                         'product_image' => $item['product_image'] ?? null,
                         'created_at' => $item['created_at'] ?? now(),
                         'updated_at' => now(),
+                        'deleted_at' => $item['deleted_at'] ?? null,
                     ],
                 );
             }
@@ -173,6 +181,7 @@ class PurchaseController extends Controller
                         'description' => $payment['description'] ?? null,
                         'created_at' => $payment['created_at'] ?? now(),
                         'updated_at' => now(),
+                        'deleted_at' => $payment['deleted_at'] ?? null,
                     ],
                 );
             }
@@ -192,14 +201,16 @@ class PurchaseController extends Controller
                         'note' => $cashTransaction['note'] ?? null,
                         'created_at' => $cashTransaction['created_at'] ?? now(),
                         'updated_at' => now(),
+                        'deleted_at' => $cashTransaction['deleted_at'] ?? null,
                     ],
                 );
             }
         });
 
         return response()->json([
-            'purchase' => Purchase::query()->find($purchaseData['id']),
+            'purchase' => Purchase::withTrashed()->find($purchaseData['id']),
             'cash_transactions' => CashTransaction::query()
+                ->withTrashed()
                 ->whereIn('id', collect($data['cash_transactions'] ?? [])->pluck('id'))
                 ->get(),
         ], 201);
