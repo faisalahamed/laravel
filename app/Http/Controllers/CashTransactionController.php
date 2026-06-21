@@ -231,18 +231,23 @@ class CashTransactionController extends Controller
                 $unpaidItems = [];
 
                 // Find all unpaid sales for customer
-                $sales = \App\Models\Sale::where('customer_id', $tx->transactable_id)
+                $sales = \App\Models\Sale::with('duePayments')
+                    ->where('customer_id', $tx->transactable_id)
                     ->where('due_amount', '>', 0.01)
                     ->orderBy('date_time', 'asc')
                     ->get();
 
                 foreach ($sales as $sale) {
-                    $unpaidItems[] = [
-                        'type' => 'sale',
-                        'model' => $sale,
-                        'due_amount' => (double) $sale->due_amount,
-                        'date_time' => $sale->date_time,
-                    ];
+                    $allocatedSum = $sale->duePayments->sum('amount');
+                    $remainingDue = (double)$sale->due_amount - (double)$allocatedSum;
+                    if ($remainingDue > 0.01) {
+                        $unpaidItems[] = [
+                            'type' => 'sale',
+                            'model' => $sale,
+                            'due_amount' => $remainingDue,
+                            'date_time' => $sale->date_time,
+                        ];
+                    }
                 }
 
                 // Find all unpaid customer loans
@@ -283,9 +288,6 @@ class CashTransactionController extends Controller
 
                     if ($item['type'] === 'sale') {
                         $sale = $item['model'];
-                        $sale->due_amount = (double) $sale->due_amount - $allocated;
-                        $sale->payment_status = $sale->due_amount <= 0.01 ? 'paid' : 'partial';
-                        $sale->save();
 
                         \App\Models\DuePayment::create([
                             'cash_transaction_id' => $tx->id,
@@ -306,17 +308,17 @@ class CashTransactionController extends Controller
                     $amountToAllocate -= $allocated;
                 }
 
-                $customer = \App\Models\Customer::find($tx->transactable_id);
+                $customer = \App\Models\Customer::withTrashed()->find($tx->transactable_id);
                 if ($customer) {
                     $customer->decrement('total_due', $tx->amount);
                 }
             } elseif ($isCustomerLoan && $tx->transactable_id) {
-                $customer = \App\Models\Customer::find($tx->transactable_id);
+                $customer = \App\Models\Customer::withTrashed()->find($tx->transactable_id);
                 if ($customer) {
                     $customer->increment('total_due', $tx->amount);
                 }
             } elseif ($isSupplierLoan && $tx->transactable_id) {
-                $supplier = \App\Models\Supplier::find($tx->transactable_id);
+                $supplier = \App\Models\Supplier::withTrashed()->find($tx->transactable_id);
                 if ($supplier) {
                     $supplier->increment('total_due', $tx->amount);
                 }
@@ -325,18 +327,23 @@ class CashTransactionController extends Controller
                 $unpaidItems = [];
 
                 // Find all unpaid purchases for supplier
-                $purchases = \App\Models\Purchase::where('supplier_id', $tx->transactable_id)
+                $purchases = \App\Models\Purchase::with('duePayments')
+                    ->where('supplier_id', $tx->transactable_id)
                     ->where('due_amount', '>', 0.01)
                     ->orderBy('date_time', 'asc')
                     ->get();
 
                 foreach ($purchases as $purchase) {
-                    $unpaidItems[] = [
-                        'type' => 'purchase',
-                        'model' => $purchase,
-                        'due_amount' => (double) $purchase->due_amount,
-                        'date_time' => $purchase->date_time,
-                    ];
+                    $allocatedSum = $purchase->duePayments->sum('amount');
+                    $remainingDue = (double)$purchase->due_amount - (double)$allocatedSum;
+                    if ($remainingDue > 0.01) {
+                        $unpaidItems[] = [
+                            'type' => 'purchase',
+                            'model' => $purchase,
+                            'due_amount' => $remainingDue,
+                            'date_time' => $purchase->date_time,
+                        ];
+                    }
                 }
 
                 // Find all unpaid supplier loans
@@ -377,9 +384,6 @@ class CashTransactionController extends Controller
 
                     if ($item['type'] === 'purchase') {
                         $purchase = $item['model'];
-                        $purchase->due_amount = (double) $purchase->due_amount - $allocated;
-                        $purchase->payment_status = $purchase->due_amount <= 0.01 ? 'paid' : 'partial';
-                        $purchase->save();
 
                         \App\Models\DuePayment::create([
                             'cash_transaction_id' => $tx->id,
@@ -400,7 +404,7 @@ class CashTransactionController extends Controller
                     $amountToAllocate -= $allocated;
                 }
 
-                $supplier = \App\Models\Supplier::find($tx->transactable_id);
+                $supplier = \App\Models\Supplier::withTrashed()->find($tx->transactable_id);
                 if ($supplier) {
                     $supplier->decrement('total_due', $tx->amount);
                 }
@@ -415,18 +419,7 @@ class CashTransactionController extends Controller
     public function destroy(CashTransaction $cashTransaction)
     {
         DB::transaction(function () use ($cashTransaction) {
-            // Retrieve and reverse all associated due payments (payments made BY this transaction)
-            $duePayments = \App\Models\DuePayment::where('cash_transaction_id', $cashTransaction->id)->get();
-            foreach ($duePayments as $duePayment) {
-                $payable = $duePayment->payable;
-                if ($payable) {
-                    if ($duePayment->payable_type === \App\Models\Sale::class || $duePayment->payable_type === \App\Models\Purchase::class) {
-                        $payable->due_amount = (double) $payable->due_amount + (double) $duePayment->amount;
-                        $payable->payment_status = $payable->due_amount >= $payable->total_amount - 0.01 ? 'due' : 'partial';
-                        $payable->save();
-                    }
-                }
-            }
+            // Reversing associated due payments is handled automatically because Sale/Purchase fields are not mutated.
 
             // Explicitly delete due payments associated with the transaction (since soft deletes bypass DB cascade)
             \App\Models\DuePayment::where('cash_transaction_id', $cashTransaction->id)->delete();
@@ -451,22 +444,22 @@ class CashTransactionController extends Controller
                                 $cashTransaction->transactable_type === 'App\Models\Supplier'));
 
             if ($isCustomerPayment && $cashTransaction->transactable_id) {
-                $customer = \App\Models\Customer::find($cashTransaction->transactable_id);
+                $customer = \App\Models\Customer::withTrashed()->find($cashTransaction->transactable_id);
                 if ($customer) {
                     $customer->increment('total_due', $cashTransaction->amount);
                 }
             } elseif ($isCustomerLoan && $cashTransaction->transactable_id) {
-                $customer = \App\Models\Customer::find($cashTransaction->transactable_id);
+                $customer = \App\Models\Customer::withTrashed()->find($cashTransaction->transactable_id);
                 if ($customer) {
                     $customer->decrement('total_due', $cashTransaction->amount);
                 }
             } elseif ($isSupplierLoan && $cashTransaction->transactable_id) {
-                $supplier = \App\Models\Supplier::find($cashTransaction->transactable_id);
+                $supplier = \App\Models\Supplier::withTrashed()->find($cashTransaction->transactable_id);
                 if ($supplier) {
                     $supplier->decrement('total_due', $cashTransaction->amount);
                 }
             } elseif ($isSupplierPayment && $cashTransaction->transactable_id) {
-                $supplier = \App\Models\Supplier::find($cashTransaction->transactable_id);
+                $supplier = \App\Models\Supplier::withTrashed()->find($cashTransaction->transactable_id);
                 if ($supplier) {
                     $supplier->increment('total_due', $cashTransaction->amount);
                 }

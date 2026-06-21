@@ -11,13 +11,13 @@ class SaleController extends Controller
     public function index(Request $request)
     {
         $userId = $request->user()->id;
-        $query = Sale::with('customer')->orderBy('date_time', 'desc')
+        $query = Sale::with(['customer', 'duePayments.cashTransaction'])->orderBy('date_time', 'desc')
             ->where('user_id', $userId);
         if ($request->has('customer_id')) {
             $query->where('customer_id', $request->customer_id);
         }
         if ($request->boolean('only_due')) {
-            $query->where('due_amount', '>', 0.01);
+            $query->whereRaw('due_amount - (SELECT COALESCE(SUM(amount), 0) FROM due_payments WHERE payable_type = ? AND payable_id = sales.id) > 0.01', [Sale::class]);
         }
         if ($request->has('page')) {
             $perPage = $request->get('per_page', 50);
@@ -68,19 +68,19 @@ class SaleController extends Controller
             ]);
         }
 
-        return response()->json($sale->load('customer'), 201);
+        return response()->json($sale->load(['customer', 'duePayments.cashTransaction']), 201);
     }
 
     public function show(Sale $sale)
     {
-        return response()->json($sale->load('customer'));
+        return response()->json($sale->load(['customer', 'duePayments.cashTransaction']));
     }
 
     public function destroy(Sale $sale)
     {
         // Decrement customer total due if deleting
         if ($sale->customer_id && $sale->due_amount > 0) {
-            $customer = Customer::find($sale->customer_id);
+            $customer = Customer::withTrashed()->find($sale->customer_id);
             $customer->decrement('total_due', min($sale->due_amount, $customer->total_due));
         }
 

@@ -35,7 +35,7 @@ class CashTransaction extends Model
 
     public function transactable()
     {
-        return $this->morphTo();
+        return $this->morphTo()->withTrashed();
     }
 
     public function duePayments()

@@ -32,6 +32,12 @@ class DashboardController extends Controller
     public function getSummary(Request $request)
     {
         $userId = $request->user()->id;
+        $today = Carbon::today()->toDateString();
+
+        if ($request->query('refresh') === 'true' || $request->has('refresh')) {
+            Cache::forget("dashboard_totals_{$userId}");
+            Cache::forget("dashboard_today_{$userId}_{$today}");
+        }
 
         // ── Totals cache (5 min) ─────────────────────────────────────────────
         $totals = Cache::remember("dashboard_totals_{$userId}", 300, function () use ($userId) {

@@ -11,13 +11,13 @@ class PurchaseController extends Controller
     public function index(Request $request)
     {
         $userId = $request->user()->id;
-        $query = Purchase::with('supplier')->orderBy('date_time', 'desc')
+        $query = Purchase::with(['supplier', 'duePayments.cashTransaction'])->orderBy('date_time', 'desc')
             ->where('user_id', $userId);
         if ($request->has('supplier_id')) {
             $query->where('supplier_id', $request->supplier_id);
         }
         if ($request->boolean('only_due')) {
-            $query->where('due_amount', '>', 0.01);
+            $query->whereRaw('due_amount - (SELECT COALESCE(SUM(amount), 0) FROM due_payments WHERE payable_type = ? AND payable_id = purchases.id) > 0.01', [Purchase::class]);
         }
         if ($request->has('page')) {
             $perPage = $request->get('per_page', 50);
@@ -93,19 +93,19 @@ class PurchaseController extends Controller
             ]);
         }
 
-        return response()->json($purchase->load('supplier'), 201);
+        return response()->json($purchase->load(['supplier', 'duePayments.cashTransaction']), 201);
     }
 
     public function show(Purchase $purchase)
     {
-        return response()->json($purchase->load('supplier'));
+        return response()->json($purchase->load(['supplier', 'duePayments.cashTransaction']));
     }
 
     public function destroy(Purchase $purchase)
     {
         // Decrement supplier total due if deleting
         if ($purchase->supplier_id && $purchase->due_amount > 0) {
-            $supplier = Supplier::find($purchase->supplier_id);
+            $supplier = Supplier::withTrashed()->find($purchase->supplier_id);
             if ($supplier) {
                 $supplier->decrement('total_due', min($purchase->due_amount, $supplier->total_due));
             }
