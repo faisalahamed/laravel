@@ -1,49 +1,104 @@
 <?php
 
-use App\Http\Controllers\Auth\LoginController;
-use App\Http\Controllers\Auth\SignupOtpController;
-use App\Http\Controllers\CategoryController;
-use App\Http\Controllers\CustomerController;
-use App\Http\Controllers\ExpenseController;
-use App\Http\Controllers\IncomeController;
-use App\Http\Controllers\NoteController;
-use App\Http\Controllers\OwnerTransactionController;
-use App\Http\Controllers\PurchaseController;
-use App\Http\Controllers\RecycleBinController;
-use App\Http\Controllers\SaleController;
-use App\Http\Controllers\SaleReturnController;
-use App\Http\Controllers\SupplierController;
 use Illuminate\Support\Facades\Route;
+use App\Http\Controllers\CustomerController;
+use App\Http\Controllers\SupplierController;
+use App\Http\Controllers\EmployeeController;
+use App\Http\Controllers\SaleController;
+use App\Http\Controllers\PurchaseController;
+use App\Http\Controllers\ExpenseController;
+use App\Http\Controllers\OwnerTransactionController;
+use App\Http\Controllers\DashboardController;
+use App\Http\Controllers\AuthController;
+use App\Http\Controllers\CashTransactionController;
+use App\Http\Controllers\ExpenseCategoryController;
 
-Route::get('/ping', function () {
-    return ['status' => 'ok'];
+// ── Public Auth Routes (no token required) ───────────────────────────────────
+Route::post('/register', [AuthController::class, 'register']);
+Route::post('/login',    [AuthController::class, 'login']);
+
+// Public endpoint to run migrations programmatically (e.g., during deployments)
+Route::get('/run-migrations', function (\Illuminate\Http\Request $request) {
+    $token = $request->query('token') ?? $request->header('X-Migration-Token');
+    $secret = env('MIGRATION_SECRET');
+    if ($secret && $token !== $secret) {
+        return response()->json(['message' => 'Unauthorized'], 401);
+    }
+
+    try {
+        \Illuminate\Support\Facades\Artisan::call('migrate', ['--force' => true]);
+        $output = \Illuminate\Support\Facades\Artisan::output();
+        return response()->json([
+            'message' => 'Migrations run successfully',
+            'output' => $output
+        ]);
+    } catch (\Exception $e) {
+        return response()->json([
+            'message' => 'Migration failed',
+            'error' => $e->getMessage()
+        ], 500);
+    }
 });
 
-Route::post('/auth/login', [LoginController::class, 'store']);
-Route::post('/auth/signup/send-otp', [SignupOtpController::class, 'store']);
-Route::post('/auth/signup/verify-otp', [SignupOtpController::class, 'verify']);
+// Public endpoint to drop all tables and re-run migrations
+Route::get('/migrate-fresh', function (\Illuminate\Http\Request $request) {
+    $token = $request->query('token') ?? $request->header('X-Migration-Token');
+    $secret = env('MIGRATION_SECRET');
+    if ($secret && $token !== $secret) {
+        return response()->json(['message' => 'Unauthorized'], 401);
+    }
 
-Route::middleware('api.token')->group(function (): void {
-    Route::get('/categories', [CategoryController::class, 'index']);
-    Route::post('/categories', [CategoryController::class, 'store']);
-    Route::get('/suppliers', [SupplierController::class, 'index']);
-    Route::post('/suppliers', [SupplierController::class, 'store']);
-    Route::get('/purchases', [PurchaseController::class, 'index']);
-    Route::post('/purchases', [PurchaseController::class, 'store']);
-    Route::get('/customers', [CustomerController::class, 'index']);
-    Route::post('/customers', [CustomerController::class, 'store']);
-    Route::get('/sales', [SaleController::class, 'index']);
-    Route::post('/sales', [SaleController::class, 'store']);
-    Route::get('/sales/returns', [SaleReturnController::class, 'index']);
-    Route::post('/sales/returns', [SaleReturnController::class, 'store']);
-    Route::get('/expenses', [ExpenseController::class, 'index']);
-    Route::post('/expenses', [ExpenseController::class, 'store']);
-    Route::get('/incomes', [IncomeController::class, 'index']);
-    Route::post('/incomes', [IncomeController::class, 'store']);
-    Route::get('/owner-transactions', [OwnerTransactionController::class, 'index']);
-    Route::post('/owner-transactions', [OwnerTransactionController::class, 'store']);
-    Route::get('/recycle-bin', [RecycleBinController::class, 'index']);
-    Route::post('/recycle-bin', [RecycleBinController::class, 'store']);
-    Route::get('/notes', [NoteController::class, 'index']);
-    Route::post('/notes', [NoteController::class, 'store']);
+    try {
+        \Illuminate\Support\Facades\Artisan::call('migrate:fresh', ['--force' => true]);
+        $output = \Illuminate\Support\Facades\Artisan::output();
+        return response()->json([
+            'message' => 'Database refreshed successfully',
+            'output' => $output
+        ]);
+    } catch (\Exception $e) {
+        return response()->json([
+            'message' => 'Database refresh failed',
+            'error' => $e->getMessage()
+        ], 500);
+    }
+});
+
+// Public endpoint to recalculate user cash balances and summaries
+Route::get('/recalculate-balances', function (\Illuminate\Http\Request $request) {
+    $token = $request->query('token') ?? $request->header('X-Migration-Token');
+    $secret = env('MIGRATION_SECRET');
+    if ($secret && $token !== $secret) {
+        return response()->json(['message' => 'Unauthorized'], 401);
+    }
+
+    try {
+        $seeder = new \Database\Seeders\SeedCashBalanceSeeder();
+        $seeder->run();
+        return response()->json([
+            'message' => 'Balances and daily summaries recalculated successfully'
+        ]);
+    } catch (\Exception $e) {
+        return response()->json([
+            'message' => 'Recalculation failed',
+            'error' => $e->getMessage()
+        ], 500);
+    }
+});
+
+// ── Protected Routes (Bearer token required) ─────────────────────────────────
+Route::middleware('auth:sanctum')->group(function () {
+
+    // Dashboard Summary API
+    Route::get('/summary', [DashboardController::class, 'getSummary']);
+
+    // Resource CRUD routes
+    Route::apiResource('/customers',          CustomerController::class);
+    Route::apiResource('/suppliers',          SupplierController::class);
+    Route::apiResource('/employees',          EmployeeController::class);
+    Route::apiResource('/sales',              SaleController::class);
+    Route::apiResource('/purchases',          PurchaseController::class);
+    Route::apiResource('/expenses',           ExpenseController::class);
+    Route::apiResource('/owner-transactions', OwnerTransactionController::class);
+    Route::apiResource('/cash-transactions',  CashTransactionController::class);
+    Route::apiResource('/expense-categories', ExpenseCategoryController::class);
 });

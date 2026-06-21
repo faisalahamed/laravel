@@ -11,28 +11,17 @@ return new class extends Migration
      */
     public function up(): void
     {
-        Schema::create('shops', function (Blueprint $table) {
-            $table->uuid('id')->primary();
-            $table->string('shop_name');
-            $table->string('email')->unique();
-            $table->string('shop_mobile');
-            $table->string('shop_website')->nullable();
-            $table->text('shop_address')->nullable();
-            $table->timestamps();
-            $table->softDeletes();
-        });
-
         Schema::create('users', function (Blueprint $table) {
-            $table->uuid('id')->primary();
-            $table->foreignUuid('shop_id')->constrained()->cascadeOnDelete();
+            $table->id();
+            $table->string('shop_name');
             $table->string('name');
+            $table->string('mobile_number')->unique();
             $table->string('email')->unique();
             $table->timestamp('email_verified_at')->nullable();
             $table->string('password');
-            $table->enum('role', ['admin', 'seller']);
             $table->rememberToken();
-            $table->timestamps();
             $table->softDeletes();
+            $table->timestamps();
         });
 
         Schema::create('password_reset_tokens', function (Blueprint $table) {
@@ -43,7 +32,7 @@ return new class extends Migration
 
         Schema::create('sessions', function (Blueprint $table) {
             $table->string('id')->primary();
-            $table->foreignUuid('user_id')->nullable()->index();
+            $table->foreignId('user_id')->nullable()->index();
             $table->string('ip_address', 45)->nullable();
             $table->text('user_agent')->nullable();
             $table->longText('payload');
@@ -56,9 +45,8 @@ return new class extends Migration
      */
     public function down(): void
     {
+        Schema::dropIfExists('users');
         Schema::dropIfExists('password_reset_tokens');
         Schema::dropIfExists('sessions');
-        Schema::dropIfExists('users');
-        Schema::dropIfExists('shops');
     }
 };

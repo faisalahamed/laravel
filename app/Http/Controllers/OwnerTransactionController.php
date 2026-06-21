@@ -2,93 +2,104 @@
 
 namespace App\Http\Controllers;
 
-use App\Models\CashTransaction;
-use Illuminate\Http\JsonResponse;
+use App\Models\OwnerTransaction;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Validator;
-use Illuminate\Validation\Rule;
-use Illuminate\Validation\ValidationException;
 
 class OwnerTransactionController extends Controller
 {
-    public function index(Request $request): JsonResponse
+    public function index(Request $request)
     {
-        $validated = $request->validate([
-            'shop_id' => ['required', 'uuid', 'exists:shops,id'],
-            'user_id' => ['nullable', 'uuid', 'exists:users,id'],
-            'updated_after' => ['nullable', 'date'],
-        ]);
+        $userId = $request->user()->id;
+        
+        $query = OwnerTransaction::query()->where('user_id', $userId);
 
-        $this->validateShopAccess($request, $validated['shop_id']);
-        $syncStartedAt = now();
+        // Filtering by period & date
+        $period = $request->query('period', 'all');
+        $dateStr = $request->query('date');
+        
+        if ($dateStr) {
+            try {
+                $date = \Carbon\Carbon::parse($dateStr);
+                if ($period === 'day') {
+                    $query->whereDate('date_time', $date->toDateString());
+                } elseif ($period === 'month') {
+                    $query->whereYear('date_time', $date->year)
+                          ->whereMonth('date_time', $date->month);
+                } elseif ($period === 'year') {
+                    $query->whereYear('date_time', $date->year);
+                }
+            } catch (\Exception $e) {
+                // Ignore invalid date format
+            }
+        }
+
+        // Calculate aggregates before pagination
+        $totalGive = (clone $query)->where('type', 'give')->sum('amount');
+        $totalTake = (clone $query)->where('type', 'take')->sum('amount');
+
+        // Pagination
+        $limit = (int) $request->query('limit', 20);
+        $paginator = $query->orderBy('date_time', 'desc')->paginate($limit);
 
         return response()->json([
-            'server_time' => $this->syncServerTime($syncStartedAt),
-            'cash_transactions' => CashTransaction::query()
-                ->withTrashed()
-                ->where('shop_id', $validated['shop_id'])
-                ->whereIn('type', ['owner_given', 'owner_taken'])
-                ->tap(fn ($query) => $this->applySyncWindow($query, $validated['updated_after'] ?? null, $syncStartedAt))
-                ->orderByDesc('created_at')
-                ->get(),
+            'transactions' => $paginator->items(),
+            'total_give' => (double) $totalGive,
+            'total_take' => (double) $totalTake,
+            'current_page' => $paginator->currentPage(),
+            'last_page' => $paginator->lastPage(),
+            'total_count' => $paginator->total(),
         ]);
     }
 
-    public function store(Request $request): JsonResponse
+    public function store(Request $request)
     {
-        $validator = Validator::make($request->all(), [
-            'cash_transactions' => ['nullable', 'array'],
-            'cash_transactions.*.id' => ['required', 'uuid'],
-            'cash_transactions.*.shop_id' => ['required', 'uuid', 'exists:shops,id'],
-            'cash_transactions.*.type' => ['required', Rule::in(['owner_given', 'owner_taken'])],
-            'cash_transactions.*.direction' => ['required', Rule::in(['in', 'out'])],
-            'cash_transactions.*.amount' => ['required', 'numeric', 'min:0'],
-            'cash_transactions.*.reference_id' => ['nullable', 'uuid'],
-            'cash_transactions.*.reference_type' => ['nullable', 'string', 'max:255'],
-            'cash_transactions.*.method' => ['nullable', 'string', 'max:255'],
-            'cash_transactions.*.note' => ['nullable', 'string'],
-            'cash_transactions.*.created_at' => ['nullable', 'date'],
-            'cash_transactions.*.updated_at' => ['nullable', 'date'],
+        $validated = $request->validate([
+            'uuid' => 'nullable|uuid|unique:owner_transactions,uuid',
+            'type' => 'required|string|in:give,take',
+            'sub_type' => 'nullable|string|in:cashbox,pocket',
+            'amount' => 'required|numeric',
+            'description' => 'nullable|string',
+            'date_time' => 'nullable|date',
         ]);
 
-        if ($validator->fails()) {
-            throw new ValidationException($validator);
+        $userId = $request->user()->id;
+        $validated['user_id'] = $userId;
+
+        $transaction = OwnerTransaction::create($validated);
+
+        // Record Cash Transaction (Only if not pocket transaction)
+        if ($transaction->sub_type !== 'pocket') {
+            \App\Models\CashTransaction::create([
+                'user_id' => $userId,
+                'type' => $transaction->type === 'give' ? 'in' : 'out',
+                'amount' => $transaction->amount,
+                'category' => $transaction->type === 'give' ? 'owner_give' : 'owner_take',
+                'description' => $transaction->type === 'give' 
+                    ? 'মালিক ক্যাশ বক্সে দিলো' . ($transaction->description ? ': ' . $transaction->description : '')
+                    : 'মালিক ক্যাশ বক্স থেকে নিলো' . ($transaction->description ? ': ' . $transaction->description : ''),
+                'transactable_type' => OwnerTransaction::class,
+                'transactable_id' => $transaction->id,
+                'date_time' => $transaction->date_time ?? now(),
+            ]);
         }
 
-        $data = $validator->validated();
-        $shopId = $data['cash_transactions'][0]['shop_id'] ?? null;
+        return response()->json($transaction, 201);
+    }
 
-        if ($shopId) {
-            $this->validateShopAccess($request, $shopId);
-            $this->validateSameShop($shopId, $data['cash_transactions'] ?? []);
-        }
+    public function show(OwnerTransaction $ownerTransaction)
+    {
+        return response()->json($ownerTransaction);
+    }
 
-        DB::transaction(function () use ($data): void {
-            foreach ($data['cash_transactions'] ?? [] as $transaction) {
-                CashTransaction::withTrashed()->updateOrCreate(
-                    ['id' => $transaction['id']],
-                    [
-                        'id' => $transaction['id'],
-                        'shop_id' => $transaction['shop_id'],
-                        'type' => $transaction['type'],
-                        'direction' => $transaction['type'] === 'owner_given' ? 'in' : 'out',
-                        'amount' => $transaction['amount'],
-                        'reference_id' => $transaction['reference_id'] ?? null,
-                        'reference_type' => $transaction['reference_type'] ?? 'owner',
-                        'method' => $transaction['method'] ?? null,
-                        'note' => $transaction['note'] ?? null,
-                        'created_at' => $transaction['created_at'] ?? now(),
-                        'updated_at' => now(),
-                    ],
-                );
-            }
-        });
+    public function destroy(OwnerTransaction $ownerTransaction)
+    {
+        // Delete associated Cash Transactions
+        \App\Models\CashTransaction::where('transactable_type', OwnerTransaction::class)
+            ->where('transactable_id', $ownerTransaction->id)
+            ->get()
+            ->each(fn($tx) => $tx->delete());
 
-        return response()->json([
-            'cash_transactions' => CashTransaction::query()
-                ->whereIn('id', collect($data['cash_transactions'] ?? [])->pluck('id'))
-                ->get(),
-        ], 201);
+        $ownerTransaction->delete();
+        return response()->json(['message' => 'Transaction deleted successfully']);
     }
 }

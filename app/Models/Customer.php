@@ -2,19 +2,26 @@
 
 namespace App\Models;
 
-use Illuminate\Database\Eloquent\Attributes\Fillable;
-use Illuminate\Database\Eloquent\Concerns\HasUuids;
+use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
-use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\SoftDeletes;
 
-#[Fillable(['id', 'shop_id', 'name', 'email', 'phone', 'address', 'notes', 'created_at', 'updated_at', 'deleted_at'])]
 class Customer extends Model
 {
-    use HasUuids;
-    use SoftDeletes;
+    use HasFactory, SoftDeletes;
 
-    public function sales(): HasMany
+    protected $fillable = [
+        'uuid',
+        'user_id',
+        'name',
+        'phone',
+        'email',
+        'address',
+        'total_due',
+        'status',
+    ];
+
+    public function sales()
     {
         return $this->hasMany(Sale::class);
     }

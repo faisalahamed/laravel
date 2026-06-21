@@ -2,38 +2,35 @@
 
 namespace App\Models;
 
-use Illuminate\Database\Eloquent\Attributes\Fillable;
-use Illuminate\Database\Eloquent\Concerns\HasUuids;
+use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
-use Illuminate\Database\Eloquent\Relations\BelongsTo;
-use Illuminate\Database\Eloquent\Relations\HasMany;
 use Illuminate\Database\Eloquent\SoftDeletes;
 
-#[Fillable(['id', 'shop_id', 'customer_id', 'subtotal', 'discount', 'vat', 'total', 'status', 'payment_method', 'created_at', 'updated_at', 'deleted_at'])]
 class Sale extends Model
 {
-    use HasUuids;
-    use SoftDeletes;
+    use HasFactory, SoftDeletes;
 
-    public function customer(): BelongsTo
+    protected $fillable = [
+        'uuid',
+        'user_id',
+        'receipt_no',
+        'customer_id',
+        'total_amount',
+        'paid_amount',
+        'due_amount',
+        'payment_status',
+        'date_time',
+        'items',
+        'payment_method',
+    ];
+
+    protected $casts = [
+        'items' => 'array',
+        'date_time' => 'datetime',
+    ];
+
+    public function customer()
     {
         return $this->belongsTo(Customer::class);
-    }
-
-    public function items(): HasMany
-    {
-        return $this->hasMany(SaleItem::class, 'order_id');
-    }
-
-    public function payments(): HasMany
-    {
-        return $this->hasMany(CustomerPayment::class, 'order_id');
-    }
-
-    public function cashTransactions(): HasMany
-    {
-        return $this->hasMany(CashTransaction::class, 'reference_id')
-            ->where('reference_type', 'sale')
-            ->where('type', 'sale');
     }
 }

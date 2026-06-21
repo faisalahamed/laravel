@@ -2,212 +2,95 @@
 
 namespace App\Http\Controllers;
 
-use App\Models\CashTransaction;
-use App\Models\CustomerPayment;
 use App\Models\Sale;
-use App\Models\SaleItem;
-use Illuminate\Http\JsonResponse;
+use App\Models\Customer;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Validator;
-use Illuminate\Validation\Rule;
-use Illuminate\Validation\ValidationException;
 
 class SaleController extends Controller
 {
-    public function index(Request $request): JsonResponse
+    public function index(Request $request)
     {
-        $validated = $request->validate([
-            'shop_id' => ['required', 'uuid', 'exists:shops,id'],
-            'user_id' => ['nullable', 'uuid', 'exists:users,id'],
-            'updated_after' => ['nullable', 'date'],
-        ]);
-
-        $this->validateShopAccess($request, $validated['shop_id']);
-        $syncStartedAt = now();
-
-        return response()->json([
-            'server_time' => $this->syncServerTime($syncStartedAt),
-            'sales' => Sale::query()
-                ->withTrashed()
-                ->where('shop_id', $validated['shop_id'])
-                ->where('updated_at', '<=', $syncStartedAt)
-                ->when(
-                    isset($validated['updated_after']),
-                    fn ($query) => $query->where(function ($query) use ($validated, $syncStartedAt): void {
-                        $query
-                            ->where(fn ($saleQuery) => $this->applySyncWindow($saleQuery, $validated['updated_after'], $syncStartedAt))
-                            ->orWhereHas('items', fn ($itemQuery) => $this->applySyncWindow($itemQuery->withTrashed(), $validated['updated_after'], $syncStartedAt))
-                            ->orWhereHas('payments', fn ($paymentQuery) => $this->applySyncWindow($paymentQuery->withTrashed(), $validated['updated_after'], $syncStartedAt))
-                            ->orWhereHas('cashTransactions', fn ($cashQuery) => $this->applySyncWindow($cashQuery->withTrashed(), $validated['updated_after'], $syncStartedAt));
-                    }),
-                )
-                ->with([
-                    'customer',
-                    'items' => fn ($query) => $query->withTrashed(),
-                    'payments' => fn ($query) => $query->withTrashed(),
-                    'cashTransactions' => fn ($query) => $query->withTrashed(),
-                ])
-                ->orderByDesc('created_at')
-                ->get(),
-        ]);
+        $userId = $request->user()->id;
+        $query = Sale::with('customer')->orderBy('date_time', 'desc')
+            ->where('user_id', $userId);
+        if ($request->has('customer_id')) {
+            $query->where('customer_id', $request->customer_id);
+        }
+        if ($request->boolean('only_due')) {
+            $query->where('due_amount', '>', 0.01);
+        }
+        if ($request->has('page')) {
+            $perPage = $request->get('per_page', 50);
+            return response()->json($query->paginate($perPage));
+        }
+        return response()->json($query->get());
     }
 
-    public function store(Request $request): JsonResponse
+    public function store(Request $request)
     {
-        $validator = Validator::make($request->all(), [
-            'sale' => ['required', 'array'],
-            'user_id' => ['nullable', 'uuid', 'exists:users,id'],
-            'sale.id' => ['required', 'uuid'],
-            'sale.shop_id' => ['required', 'uuid', 'exists:shops,id'],
-            'sale.customer_id' => ['required', 'uuid', 'exists:customers,id'],
-            'sale.subtotal' => ['nullable', 'numeric', 'min:0'],
-            'sale.discount' => ['nullable', 'numeric', 'min:0'],
-            'sale.vat' => ['nullable', 'numeric', 'min:0'],
-            'sale.total' => ['required', 'numeric', 'min:0'],
-            'sale.status' => ['required', Rule::in(['pending', 'completed'])],
-            'sale.payment_method' => ['nullable', 'string', 'max:255'],
-            'sale.created_at' => ['nullable', 'date'],
-            'sale.updated_at' => ['nullable', 'date'],
-            'sale.deleted_at' => ['nullable', 'date'],
-
-            'items' => ['required', 'array', 'min:1'],
-            'items.*.id' => ['required', 'uuid'],
-            'items.*.shop_id' => ['required', 'uuid', 'exists:shops,id'],
-            'items.*.order_id' => ['nullable', 'uuid'],
-            'items.*.product_id' => ['required', 'uuid', 'exists:purchase_items,id'],
-            'items.*.buy_price' => ['required', 'numeric', 'min:0'],
-            'items.*.sale_price' => ['required', 'numeric', 'min:0'],
-            'items.*.quantity' => ['required', 'integer', 'min:1'],
-            'items.*.price' => ['required', 'numeric', 'min:0'],
-            'items.*.created_at' => ['nullable', 'date'],
-            'items.*.updated_at' => ['nullable', 'date'],
-            'items.*.deleted_at' => ['nullable', 'date'],
-
-            'payments' => ['nullable', 'array'],
-            'payments.*.id' => ['required', 'uuid'],
-            'payments.*.shop_id' => ['required', 'uuid', 'exists:shops,id'],
-            'payments.*.customer_id' => ['required', 'uuid', 'exists:customers,id'],
-            'payments.*.order_id' => ['nullable', 'uuid'],
-            'payments.*.payments' => ['required', 'numeric', 'min:0'],
-            'payments.*.description' => ['nullable', 'string'],
-            'payments.*.created_at' => ['nullable', 'date'],
-            'payments.*.updated_at' => ['nullable', 'date'],
-            'payments.*.deleted_at' => ['nullable', 'date'],
-
-            'cash_transactions' => ['nullable', 'array'],
-            'cash_transactions.*.id' => ['required', 'uuid'],
-            'cash_transactions.*.shop_id' => ['required', 'uuid', 'exists:shops,id'],
-            'cash_transactions.*.type' => ['required', Rule::in(['sale', 'customer_payment', 'purchase_payment', 'expense', 'owner_given', 'owner_taken'])],
-            'cash_transactions.*.direction' => ['required', Rule::in(['in', 'out'])],
-            'cash_transactions.*.amount' => ['required', 'numeric', 'min:0'],
-            'cash_transactions.*.reference_id' => ['nullable', 'uuid'],
-            'cash_transactions.*.reference_type' => ['nullable', 'string', 'max:255'],
-            'cash_transactions.*.method' => ['nullable', 'string', 'max:255'],
-            'cash_transactions.*.note' => ['nullable', 'string'],
-            'cash_transactions.*.created_at' => ['nullable', 'date'],
-            'cash_transactions.*.updated_at' => ['nullable', 'date'],
-            'cash_transactions.*.deleted_at' => ['nullable', 'date'],
+        $validated = $request->validate([
+            'uuid' => 'nullable|uuid|unique:sales,uuid',
+            'receipt_no' => 'required|string',
+            'customer_id' => 'nullable|exists:customers,id',
+            'total_amount' => 'required|numeric',
+            'paid_amount' => 'required|numeric',
+            'due_amount' => 'required|numeric',
+            'payment_status' => 'required|string',
+            'date_time' => 'nullable|date',
+            'items' => 'nullable|array',
+            'payment_method' => 'nullable|string',
         ]);
 
-        if ($validator->fails()) {
-            throw new ValidationException($validator);
+        $userId = $request->user()->id;
+        $validated['user_id'] = $userId;
+
+        $sale = Sale::create($validated);
+
+        // Update customer total due
+        if ($sale->customer_id && $sale->due_amount > 0) {
+            $customer = Customer::find($sale->customer_id);
+            if ($customer) {
+                $customer->increment('total_due', $sale->due_amount);
+            }
+        }
+        // Record Cash Transaction
+        if ($sale->paid_amount > 0) {
+            \App\Models\CashTransaction::create([
+                'user_id' => $userId,
+                'type' => 'in',
+                'amount' => $sale->paid_amount,
+                'category' => 'sale',
+                'description' => 'বিক্রি: ' . $sale->receipt_no,
+                'transactable_type' => Sale::class,
+                'transactable_id' => $sale->id,
+                'date_time' => $sale->date_time ?? now(),
+                'payment_method' => $sale->payment_method,
+            ]);
         }
 
-        $data = $validator->validated();
-        $saleData = $data['sale'];
+        return response()->json($sale->load('customer'), 201);
+    }
 
-        $this->validateShopAccess($request, $saleData['shop_id']);
-        $this->validateSameShop($saleData['shop_id'], $data['items']);
-        $this->validateSameShop($saleData['shop_id'], $data['payments'] ?? []);
-        $this->validateSameShop($saleData['shop_id'], $data['cash_transactions'] ?? []);
+    public function show(Sale $sale)
+    {
+        return response()->json($sale->load('customer'));
+    }
 
-        DB::transaction(function () use ($data, $saleData): void {
-            Sale::withTrashed()->updateOrCreate(
-                ['id' => $saleData['id']],
-                [
-                    'id' => $saleData['id'],
-                    'shop_id' => $saleData['shop_id'],
-                    'customer_id' => $saleData['customer_id'],
-                    'subtotal' => $saleData['subtotal'] ?? $saleData['total'],
-                    'discount' => $saleData['discount'] ?? 0,
-                    'vat' => $saleData['vat'] ?? 0,
-                    'total' => $saleData['total'],
-                    'status' => $saleData['status'],
-                    'payment_method' => $saleData['payment_method'] ?? null,
-                    'created_at' => $saleData['created_at'] ?? now(),
-                    'updated_at' => now(),
-                    'deleted_at' => $saleData['deleted_at'] ?? null,
-                ],
-            );
+    public function destroy(Sale $sale)
+    {
+        // Decrement customer total due if deleting
+        if ($sale->customer_id && $sale->due_amount > 0) {
+            $customer = Customer::find($sale->customer_id);
+            $customer->decrement('total_due', min($sale->due_amount, $customer->total_due));
+        }
 
-            foreach ($data['items'] as $item) {
-                SaleItem::withTrashed()->updateOrCreate(
-                    ['id' => $item['id']],
-                    [
-                        'id' => $item['id'],
-                        'shop_id' => $item['shop_id'],
-                        'order_id' => $saleData['id'],
-                        'product_id' => $item['product_id'],
-                        'buy_price' => $item['buy_price'],
-                        'sale_price' => $item['sale_price'],
-                        'quantity' => $item['quantity'],
-                        'price' => $item['price'],
-                        'created_at' => $item['created_at'] ?? now(),
-                        'updated_at' => now(),
-                        'deleted_at' => $item['deleted_at'] ?? null,
-                    ],
-                );
-            }
+        // Delete associated Cash Transactions
+        \App\Models\CashTransaction::where('transactable_type', Sale::class)
+            ->where('transactable_id', $sale->id)
+            ->get()
+            ->each(fn($tx) => $tx->delete());
 
-            foreach ($data['payments'] ?? [] as $payment) {
-                CustomerPayment::withTrashed()->updateOrCreate(
-                    ['id' => $payment['id']],
-                    [
-                        'id' => $payment['id'],
-                        'shop_id' => $payment['shop_id'],
-                        'customer_id' => $payment['customer_id'],
-                        'order_id' => $saleData['id'],
-                        'payments' => $payment['payments'],
-                        'description' => $payment['description'] ?? null,
-                        'created_at' => $payment['created_at'] ?? now(),
-                        'updated_at' => now(),
-                        'deleted_at' => $payment['deleted_at'] ?? null,
-                    ],
-                );
-            }
-
-            foreach ($data['cash_transactions'] ?? [] as $cashTransaction) {
-                CashTransaction::withTrashed()->updateOrCreate(
-                    ['id' => $cashTransaction['id']],
-                    [
-                        'id' => $cashTransaction['id'],
-                        'shop_id' => $cashTransaction['shop_id'],
-                        'type' => $cashTransaction['type'],
-                        'direction' => $cashTransaction['direction'],
-                        'amount' => $cashTransaction['amount'],
-                        'reference_id' => $cashTransaction['reference_id'] ?? $saleData['id'],
-                        'reference_type' => $cashTransaction['reference_type'] ?? 'sale',
-                        'method' => $cashTransaction['method'] ?? null,
-                        'note' => $cashTransaction['note'] ?? null,
-                        'created_at' => $cashTransaction['created_at'] ?? now(),
-                        'updated_at' => now(),
-                        'deleted_at' => $cashTransaction['deleted_at'] ?? null,
-                    ],
-                );
-            }
-        });
-
-        return response()->json([
-            'sale' => Sale::query()
-                ->withTrashed()
-                ->with([
-                    'customer',
-                    'items' => fn ($query) => $query->withTrashed(),
-                    'payments' => fn ($query) => $query->withTrashed(),
-                    'cashTransactions' => fn ($query) => $query->withTrashed(),
-                ])
-                ->find($saleData['id']),
-        ], 201);
+        $sale->delete();
+        return response()->json(['message' => 'Sale deleted successfully']);
     }
 }

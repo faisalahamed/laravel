@@ -2,217 +2,126 @@
 
 namespace App\Http\Controllers;
 
-use App\Models\CashTransaction;
 use App\Models\Purchase;
-use App\Models\PurchaseItem;
-use App\Models\PurchasePayment;
-use Illuminate\Http\JsonResponse;
+use App\Models\Supplier;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Validator;
-use Illuminate\Validation\Rule;
-use Illuminate\Validation\ValidationException;
 
 class PurchaseController extends Controller
 {
-    public function index(Request $request): JsonResponse
+    public function index(Request $request)
     {
-        $validated = $request->validate([
-            'shop_id' => ['required', 'uuid', 'exists:shops,id'],
-            'user_id' => ['nullable', 'uuid', 'exists:users,id'],
-            'updated_after' => ['nullable', 'date'],
-        ]);
-
-        $this->validateShopAccess($request, $validated['shop_id']);
-        $syncStartedAt = now();
-
-        return response()->json([
-            'server_time' => $this->syncServerTime($syncStartedAt),
-            'purchases' => Purchase::query()
-                ->withTrashed()
-                ->where('shop_id', $validated['shop_id'])
-                ->where('updated_at', '<=', $syncStartedAt)
-                ->when(
-                    isset($validated['updated_after']),
-                    fn ($query) => $query->where(function ($query) use ($validated, $syncStartedAt): void {
-                        $query
-                            ->where(fn ($purchaseQuery) => $this->applySyncWindow($purchaseQuery, $validated['updated_after'], $syncStartedAt))
-                            ->orWhereHas('items', fn ($itemQuery) => $this->applySyncWindow($itemQuery->withTrashed(), $validated['updated_after'], $syncStartedAt))
-                            ->orWhereHas('payments', fn ($paymentQuery) => $this->applySyncWindow($paymentQuery->withTrashed(), $validated['updated_after'], $syncStartedAt));
-                    }),
-                )
-                ->with([
-                    'items' => fn ($query) => $query->withTrashed(),
-                    'payments' => fn ($query) => $query->withTrashed(),
-                ])
-                ->orderByDesc('created_at')
-                ->get(),
-            'cash_transactions' => CashTransaction::query()
-                ->withTrashed()
-                ->where('shop_id', $validated['shop_id'])
-                ->where('type', 'purchase_payment')
-                ->tap(fn ($query) => $this->applySyncWindow($query, $validated['updated_after'] ?? null, $syncStartedAt))
-                ->orderByDesc('created_at')
-                ->get(),
-        ]);
+        $userId = $request->user()->id;
+        $query = Purchase::with('supplier')->orderBy('date_time', 'desc')
+            ->where('user_id', $userId);
+        if ($request->has('supplier_id')) {
+            $query->where('supplier_id', $request->supplier_id);
+        }
+        if ($request->boolean('only_due')) {
+            $query->where('due_amount', '>', 0.01);
+        }
+        if ($request->has('page')) {
+            $perPage = $request->get('per_page', 50);
+            return response()->json($query->paginate($perPage));
+        }
+        return response()->json($query->get());
     }
 
-    public function store(Request $request): JsonResponse
+    public function store(Request $request)
     {
-        $validator = Validator::make($request->all(), [
-            'purchase' => ['required', 'array'],
-            'purchase.id' => ['required', 'uuid'],
-            'purchase.shop_id' => ['required', 'uuid', 'exists:shops,id'],
-            'purchase.supplier_id' => ['required', 'uuid', 'exists:suppliers,id'],
-            'purchase.source_type' => ['nullable', Rule::in(['purchase', 'manual_stock'])],
-            'purchase.total' => ['required', 'numeric', 'min:0'],
-            'purchase.other_charge' => ['nullable', 'numeric', 'min:0'],
-            'purchase.description' => ['nullable', 'string'],
-            'purchase.buying_memo_url' => ['nullable', 'string', 'max:2048'],
-            'purchase.status' => ['required', Rule::in(['pending', 'completed'])],
-            'purchase.created_at' => ['nullable', 'date'],
-            'purchase.updated_at' => ['nullable', 'date'],
-            'purchase.deleted_at' => ['nullable', 'date'],
-
-            'items' => ['required', 'array', 'min:1'],
-            'items.*.id' => ['required', 'uuid'],
-            'items.*.shop_id' => ['required', 'uuid', 'exists:shops,id'],
-            'items.*.purchase_id' => ['nullable', 'uuid'],
-            'items.*.category_id' => ['nullable', 'uuid', 'exists:categories,id'],
-            'items.*.product_name' => ['required', 'string', 'max:255'],
-            'items.*.buying_price' => ['required', 'numeric', 'min:0'],
-            'items.*.est_selling_price' => ['nullable', 'numeric', 'min:0'],
-            'items.*.quantity' => ['required', 'integer', 'min:0'],
-            'items.*.barcode' => ['nullable', 'string', 'max:255'],
-            'items.*.other_charge' => ['nullable', 'numeric', 'min:0'],
-            'items.*.description' => ['nullable', 'string'],
-            'items.*.product_image' => ['nullable', 'string', 'max:2048'],
-            'items.*.created_at' => ['nullable', 'date'],
-            'items.*.updated_at' => ['nullable', 'date'],
-            'items.*.deleted_at' => ['nullable', 'date'],
-
-            'payments' => ['nullable', 'array'],
-            'payments.*.id' => ['required', 'uuid'],
-            'payments.*.shop_id' => ['required', 'uuid', 'exists:shops,id'],
-            'payments.*.purchase_id' => ['nullable', 'uuid'],
-            'payments.*.payments' => ['required', 'numeric', 'min:0'],
-            'payments.*.description' => ['nullable', 'string'],
-            'payments.*.created_at' => ['nullable', 'date'],
-            'payments.*.updated_at' => ['nullable', 'date'],
-            'payments.*.deleted_at' => ['nullable', 'date'],
-
-            'cash_transactions' => ['nullable', 'array'],
-            'cash_transactions.*.id' => ['required', 'uuid'],
-            'cash_transactions.*.shop_id' => ['required', 'uuid', 'exists:shops,id'],
-            'cash_transactions.*.type' => ['required', Rule::in(['purchase_payment'])],
-            'cash_transactions.*.direction' => ['required', Rule::in(['out'])],
-            'cash_transactions.*.amount' => ['required', 'numeric', 'min:0'],
-            'cash_transactions.*.reference_id' => ['nullable', 'uuid'],
-            'cash_transactions.*.reference_type' => ['nullable', 'string', 'max:255'],
-            'cash_transactions.*.method' => ['nullable', 'string', 'max:255'],
-            'cash_transactions.*.note' => ['nullable', 'string'],
-            'cash_transactions.*.created_at' => ['nullable', 'date'],
-            'cash_transactions.*.updated_at' => ['nullable', 'date'],
-            'cash_transactions.*.deleted_at' => ['nullable', 'date'],
+        $validated = $request->validate([
+            'uuid' => 'nullable|uuid|unique:purchases,uuid',
+            'receipt_no' => 'required|string',
+            'supplier_id' => 'nullable|exists:suppliers,id',
+            'total_amount' => 'required|numeric',
+            'paid_amount' => 'required|numeric',
+            'due_amount' => 'required|numeric',
+            'payment_status' => 'required|string',
+            'date_time' => 'nullable|date',
+            'items' => 'nullable|array',
         ]);
 
-        if ($validator->fails()) {
-            throw new ValidationException($validator);
+        $userId = $request->user()->id;
+        $validated['user_id'] = $userId;
+
+        $purchase = Purchase::create($validated);
+
+        // Update supplier total due
+        if ($purchase->supplier_id && $purchase->due_amount > 0) {
+            $supplier = Supplier::find($purchase->supplier_id);
+            if ($supplier) {
+                $supplier->increment('total_due', $purchase->due_amount);
+            }
         }
 
-        $data = $validator->validated();
-        $purchaseData = $data['purchase'];
 
-        $this->validateShopAccess($request, $purchaseData['shop_id']);
-        $this->validateSameShop($purchaseData['shop_id'], $data['items']);
-        $this->validateSameShop($purchaseData['shop_id'], $data['payments'] ?? []);
-        $this->validateSameShop($purchaseData['shop_id'], $data['cash_transactions'] ?? []);
-
-        DB::transaction(function () use ($data, $purchaseData): void {
-            Purchase::withTrashed()->updateOrCreate(
-                ['id' => $purchaseData['id']],
-                [
-                    'id' => $purchaseData['id'],
-                    'shop_id' => $purchaseData['shop_id'],
-                    'supplier_id' => $purchaseData['supplier_id'],
-                    'source_type' => $purchaseData['source_type'] ?? 'purchase',
-                    'total' => $purchaseData['total'],
-                    'other_charge' => $purchaseData['other_charge'] ?? 0,
-                    'description' => $purchaseData['description'] ?? null,
-                    'buying_memo_url' => $purchaseData['buying_memo_url'] ?? null,
-                    'status' => $purchaseData['status'],
-                    'created_at' => $purchaseData['created_at'] ?? now(),
-                    'updated_at' => now(),
-                    'deleted_at' => $purchaseData['deleted_at'] ?? null,
-                ],
-            );
-
-            foreach ($data['items'] as $item) {
-                PurchaseItem::withTrashed()->updateOrCreate(
-                    ['id' => $item['id']],
-                    [
-                        'id' => $item['id'],
-                        'shop_id' => $item['shop_id'],
-                        'purchase_id' => $purchaseData['id'],
-                        'category_id' => $item['category_id'] ?? null,
-                        'product_name' => $item['product_name'],
-                        'buying_price' => $item['buying_price'],
-                        'est_selling_price' => $item['est_selling_price'] ?? null,
-                        'quantity' => $item['quantity'],
-                        'barcode' => $item['barcode'] ?? null,
-                        'other_charge' => $item['other_charge'] ?? 0,
-                        'description' => $item['description'] ?? null,
-                        'product_image' => $item['product_image'] ?? null,
-                        'created_at' => $item['created_at'] ?? now(),
-                        'updated_at' => now(),
-                        'deleted_at' => $item['deleted_at'] ?? null,
-                    ],
-                );
+        $cashboxAmount = $purchase->paid_amount;
+        $ownerPocketAmount = 0.0;
+        
+        if (is_array($purchase->items)) {
+            if (isset($purchase->items['cashbox_amount'])) {
+                $cashboxAmount = (double) $purchase->items['cashbox_amount'];
             }
-
-            foreach ($data['payments'] ?? [] as $payment) {
-                PurchasePayment::withTrashed()->updateOrCreate(
-                    ['id' => $payment['id']],
-                    [
-                        'id' => $payment['id'],
-                        'shop_id' => $payment['shop_id'],
-                        'purchase_id' => $purchaseData['id'],
-                        'payments' => $payment['payments'],
-                        'description' => $payment['description'] ?? null,
-                        'created_at' => $payment['created_at'] ?? now(),
-                        'updated_at' => now(),
-                        'deleted_at' => $payment['deleted_at'] ?? null,
-                    ],
-                );
+            if (isset($purchase->items['owner_pocket_amount'])) {
+                $ownerPocketAmount = (double) $purchase->items['owner_pocket_amount'];
             }
+        }
 
-            foreach ($data['cash_transactions'] ?? [] as $cashTransaction) {
-                CashTransaction::withTrashed()->updateOrCreate(
-                    ['id' => $cashTransaction['id']],
-                    [
-                        'id' => $cashTransaction['id'],
-                        'shop_id' => $cashTransaction['shop_id'],
-                        'type' => 'purchase_payment',
-                        'direction' => 'out',
-                        'amount' => $cashTransaction['amount'],
-                        'reference_id' => $cashTransaction['reference_id'] ?? $purchaseData['id'],
-                        'reference_type' => $cashTransaction['reference_type'] ?? 'purchase',
-                        'method' => $cashTransaction['method'] ?? null,
-                        'note' => $cashTransaction['note'] ?? null,
-                        'created_at' => $cashTransaction['created_at'] ?? now(),
-                        'updated_at' => now(),
-                        'deleted_at' => $cashTransaction['deleted_at'] ?? null,
-                    ],
-                );
+        // Record Cash Transaction
+        if ($cashboxAmount > 0) {
+            \App\Models\CashTransaction::create([
+                'user_id' => $userId,
+                'type' => 'out',
+                'amount' => $cashboxAmount,
+                'category' => 'purchase',
+                'description' => 'ক্রয় (ক্যাশবক্স): ' . $purchase->receipt_no,
+                'transactable_type' => Purchase::class,
+                'transactable_id' => $purchase->id,
+                'date_time' => $purchase->date_time ?? now(),
+            ]);
+        }
+
+        // Record Owner Transaction (Pocket)
+        if ($ownerPocketAmount > 0) {
+            \App\Models\OwnerTransaction::create([
+                'user_id' => $userId,
+                'uuid' => (string) \Illuminate\Support\Str::uuid(),
+                'type' => 'give',
+                'sub_type' => 'pocket',
+                'amount' => $ownerPocketAmount,
+                'description' => 'ক্রয় বাবদ মালিকের পকেট থেকে পরিশোধ: ' . $purchase->receipt_no,
+                'date_time' => $purchase->date_time ?? now(),
+            ]);
+        }
+
+        return response()->json($purchase->load('supplier'), 201);
+    }
+
+    public function show(Purchase $purchase)
+    {
+        return response()->json($purchase->load('supplier'));
+    }
+
+    public function destroy(Purchase $purchase)
+    {
+        // Decrement supplier total due if deleting
+        if ($purchase->supplier_id && $purchase->due_amount > 0) {
+            $supplier = Supplier::find($purchase->supplier_id);
+            if ($supplier) {
+                $supplier->decrement('total_due', min($purchase->due_amount, $supplier->total_due));
             }
-        });
+        }
 
-        return response()->json([
-            'purchase' => Purchase::withTrashed()->find($purchaseData['id']),
-            'cash_transactions' => CashTransaction::query()
-                ->withTrashed()
-                ->whereIn('id', collect($data['cash_transactions'] ?? [])->pluck('id'))
-                ->get(),
-        ], 201);
+        // Delete associated Cash Transactions
+        \App\Models\CashTransaction::where('transactable_type', Purchase::class)
+            ->where('transactable_id', $purchase->id)
+            ->get()
+            ->each(fn($tx) => $tx->delete());
+
+        // Delete associated Owner Transactions
+        \App\Models\OwnerTransaction::where('description', 'ক্রয় বাবদ মালিকের পকেট থেকে পরিশোধ: ' . $purchase->receipt_no)
+            ->delete();
+
+        $purchase->delete();
+        return response()->json(['message' => 'Purchase deleted successfully']);
     }
 }

@@ -2,7 +2,6 @@
 
 namespace Database\Factories;
 
-use App\Models\Shop;
 use App\Models\User;
 use Illuminate\Database\Eloquent\Factories\Factory;
 use Illuminate\Support\Facades\Hash;
@@ -26,12 +25,10 @@ class UserFactory extends Factory
     public function definition(): array
     {
         return [
-            'shop_id' => Shop::factory(),
             'name' => fake()->name(),
             'email' => fake()->unique()->safeEmail(),
             'email_verified_at' => now(),
             'password' => static::$password ??= Hash::make('password'),
-            'role' => 'admin',
             'remember_token' => Str::random(10),
         ];
     }

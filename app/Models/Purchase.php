@@ -2,25 +2,34 @@
 
 namespace App\Models;
 
-use Illuminate\Database\Eloquent\Attributes\Fillable;
-use Illuminate\Database\Eloquent\Concerns\HasUuids;
-use Illuminate\Database\Eloquent\Relations\HasMany;
+use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\SoftDeletes;
 
-#[Fillable(['id', 'shop_id', 'supplier_id', 'source_type', 'total', 'other_charge', 'description', 'buying_memo_url', 'status', 'created_at', 'updated_at', 'deleted_at'])]
 class Purchase extends Model
 {
-    use HasUuids;
-    use SoftDeletes;
+    use HasFactory, SoftDeletes;
 
-    public function items(): HasMany
-    {
-        return $this->hasMany(PurchaseItem::class);
-    }
+    protected $fillable = [
+        'uuid',
+        'user_id',
+        'receipt_no',
+        'supplier_id',
+        'total_amount',
+        'paid_amount',
+        'due_amount',
+        'payment_status',
+        'date_time',
+        'items',
+    ];
 
-    public function payments(): HasMany
+    protected $casts = [
+        'items' => 'array',
+        'date_time' => 'datetime',
+    ];
+
+    public function supplier()
     {
-        return $this->hasMany(PurchasePayment::class);
+        return $this->belongsTo(Supplier::class);
     }
 }

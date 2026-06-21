@@ -2,132 +2,73 @@
 
 namespace App\Http\Controllers;
 
-use App\Models\CashTransaction;
 use App\Models\Expense;
-use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\DB;
-use Illuminate\Support\Facades\Validator;
-use Illuminate\Validation\Rule;
-use Illuminate\Validation\ValidationException;
 
 class ExpenseController extends Controller
 {
-    public function index(Request $request): JsonResponse
+    public function index(Request $request)
     {
-        $validated = $request->validate([
-            'shop_id' => ['required', 'uuid', 'exists:shops,id'],
-            'user_id' => ['nullable', 'uuid', 'exists:users,id'],
-            'updated_after' => ['nullable', 'date'],
-        ]);
+        $userId = $request->user()->id;
+        $query = Expense::with('employee')
+            ->where('user_id', $userId);
 
-        $this->validateShopAccess($request, $validated['shop_id']);
-        $syncStartedAt = now();
+        if ($request->has('category')) {
+            $query->where('category', $request->category);
+        }
 
-        return response()->json([
-            'server_time' => $this->syncServerTime($syncStartedAt),
-            'expenses' => Expense::query()
-                ->withTrashed()
-                ->where('shop_id', $validated['shop_id'])
-                ->tap(fn ($query) => $this->applySyncWindow($query, $validated['updated_after'] ?? null, $syncStartedAt))
-                ->orderByDesc('created_at')
-                ->get(),
-            'cash_transactions' => CashTransaction::query()
-                ->withTrashed()
-                ->where('shop_id', $validated['shop_id'])
-                ->where('type', 'expense')
-                ->tap(fn ($query) => $this->applySyncWindow($query, $validated['updated_after'] ?? null, $syncStartedAt))
-                ->orderByDesc('created_at')
-                ->get(),
-        ]);
+        if ($request->has('date')) {
+            $query->whereDate('date', $request->date);
+        }
+
+        return response()->json($query->orderBy('date', 'desc')->get());
     }
 
-    public function store(Request $request): JsonResponse
+    public function store(Request $request)
     {
-        $validator = Validator::make($request->all(), [
-            'expenses' => ['nullable', 'array'],
-            'expenses.*.id' => ['required', 'uuid'],
-            'expenses.*.shop_id' => ['required', 'uuid', 'exists:shops,id'],
-            'expenses.*.category_id' => ['required', 'uuid', 'exists:categories,id'],
-            'expenses.*.amount' => ['required', 'numeric', 'min:0'],
-            'expenses.*.reason' => ['nullable', 'string', 'max:255'],
-            'expenses.*.note' => ['nullable', 'string'],
-            'expenses.*.created_at' => ['nullable', 'date'],
-            'expenses.*.updated_at' => ['nullable', 'date'],
-
-            'cash_transactions' => ['nullable', 'array'],
-            'cash_transactions.*.id' => ['required', 'uuid'],
-            'cash_transactions.*.shop_id' => ['required', 'uuid', 'exists:shops,id'],
-            'cash_transactions.*.type' => ['required', Rule::in(['expense'])],
-            'cash_transactions.*.direction' => ['required', Rule::in(['out'])],
-            'cash_transactions.*.amount' => ['required', 'numeric', 'min:0'],
-            'cash_transactions.*.reference_id' => ['nullable', 'uuid'],
-            'cash_transactions.*.reference_type' => ['nullable', 'string', 'max:255'],
-            'cash_transactions.*.method' => ['nullable', 'string', 'max:255'],
-            'cash_transactions.*.note' => ['nullable', 'string'],
-            'cash_transactions.*.created_at' => ['nullable', 'date'],
-            'cash_transactions.*.updated_at' => ['nullable', 'date'],
+        $validated = $request->validate([
+            'uuid' => 'nullable|uuid|unique:expenses,uuid',
+            'category' => 'required|string',
+            'employee_id' => 'nullable|exists:employees,id',
+            'amount' => 'required|numeric',
+            'reason' => 'nullable|string',
+            'attachment_path' => 'nullable|string',
+            'date' => 'required|date',
         ]);
 
-        if ($validator->fails()) {
-            throw new ValidationException($validator);
-        }
+        $userId = $request->user()->id;
+        $validated['user_id'] = $userId;
+        $expense = Expense::create($validated);
 
-        $data = $validator->validated();
-        $shopId = ($data['expenses'][0]['shop_id'] ?? null)
-            ?? ($data['cash_transactions'][0]['shop_id'] ?? null);
+        // Record Cash Transaction
+        \App\Models\CashTransaction::create([
+            'user_id' => $userId,
+            'type' => 'out',
+            'amount' => $expense->amount,
+            'category' => 'expense',
+            'description' => 'খরচ (' . $expense->category . '): ' . ($expense->reason ?? ''),
+            'transactable_type' => Expense::class,
+            'transactable_id' => $expense->id,
+            'date_time' => $expense->date ?? now(),
+        ]);
 
-        if ($shopId) {
-            $this->validateShopAccess($request, $shopId);
-            $this->validateSameShop($shopId, $data['expenses'] ?? []);
-            $this->validateSameShop($shopId, $data['cash_transactions'] ?? []);
-        }
+        return response()->json($expense->load('employee'), 201);
+    }
 
-        DB::transaction(function () use ($data): void {
-            foreach ($data['expenses'] ?? [] as $expense) {
-                Expense::withTrashed()->updateOrCreate(
-                    ['id' => $expense['id']],
-                    [
-                        'id' => $expense['id'],
-                        'shop_id' => $expense['shop_id'],
-                        'category_id' => $expense['category_id'],
-                        'amount' => $expense['amount'],
-                        'total' => $expense['amount'],
-                        'reason' => $expense['reason'] ?? null,
-                        'note' => $expense['note'] ?? null,
-                        'created_at' => $expense['created_at'] ?? now(),
-                        'updated_at' => now(),
-                    ],
-                );
-            }
+    public function show(Expense $expense)
+    {
+        return response()->json($expense->load('employee'));
+    }
 
-            foreach ($data['cash_transactions'] ?? [] as $transaction) {
-                CashTransaction::withTrashed()->updateOrCreate(
-                    ['id' => $transaction['id']],
-                    [
-                        'id' => $transaction['id'],
-                        'shop_id' => $transaction['shop_id'],
-                        'type' => 'expense',
-                        'direction' => 'out',
-                        'amount' => $transaction['amount'],
-                        'reference_id' => $transaction['reference_id'] ?? null,
-                        'reference_type' => $transaction['reference_type'] ?? 'expense',
-                        'method' => $transaction['method'] ?? null,
-                        'note' => $transaction['note'] ?? null,
-                        'created_at' => $transaction['created_at'] ?? now(),
-                        'updated_at' => now(),
-                    ],
-                );
-            }
-        });
+    public function destroy(Expense $expense)
+    {
+        // Delete associated Cash Transactions
+        \App\Models\CashTransaction::where('transactable_type', Expense::class)
+            ->where('transactable_id', $expense->id)
+            ->get()
+            ->each(fn($tx) => $tx->delete());
 
-        return response()->json([
-            'expenses' => Expense::query()
-                ->whereIn('id', collect($data['expenses'] ?? [])->pluck('id'))
-                ->get(),
-            'cash_transactions' => CashTransaction::query()
-                ->whereIn('id', collect($data['cash_transactions'] ?? [])->pluck('id'))
-                ->get(),
-        ], 201);
+        $expense->delete();
+        return response()->json(['message' => 'Expense deleted successfully']);
     }
 }
